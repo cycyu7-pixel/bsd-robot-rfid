@@ -114,6 +114,8 @@ run_container() {
     #   缺点：特权模式，容器有宿主机 root 权限
     # 这里默认用方式 B，因为读写器经常拔插
     # ============================================================
+    # 注意：不传 RFID_SERIAL_PORT 环境变量，让程序按 application.yml
+    # 里的 serial-port: auto 自动扫描所有可用串口（包括 ttyACM*）
     docker run -d \
         --name "$CONTAINER_NAME" \
         --restart=always \
@@ -121,7 +123,6 @@ run_container() {
         -v /dev:/dev \
         -v "$LOG_DIR":"$LOG_DIR" \
         -e SPRING_PROFILES_ACTIVE="$SPRING_PROFILE" \
-        -e RFID_SERIAL_PORT="$SERIAL_DEVICE" \
         -e TZ=Asia/Shanghai \
         "$IMAGE_NAME:$IMAGE_TAG"
 
