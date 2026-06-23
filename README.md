@@ -1,31 +1,116 @@
 # InLay-RFID — InLayLink RFID 读写器客户端
 
-基于 Spring Boot 2.4 + InLayLink RFID SDK V2.2 的读写器控制程序。
-- 串口自动扫描 + 多波特率自适应
-- 后台持续盘点，新标签实时打印
-- 读写器热插拔自动重连
-- 日志按天滚动，保留 3 天
-- 支持 Docker 一键部署
+基于 Spring Boot 2.4 + InLayLink RFID SDK 的读写器后台服务。插上读写器自动连接、持续盘点；掉线自动重连；服务器重启自动恢复。无人值守。
 
-## 项目结构
+---
+
+## 一、它做什么
+
+读取附近 RFID 标签的编号（EPC），自动去重，写入日志文件。
+
+部署到工业电脑或服务器之后：
+- 启动 → 找到读写器 → 应用配置 → 开始持续盘点
+- 标签靠近天线 → 日志写一条 `【新标签】 EPC=...`
+- 读写器拔掉或断电 → 不崩溃，后台等设备回来
+- 服务器重启 → Docker 自动拉起容器，程序自动跑
+
+---
+
+## 二、软件架构
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                       外部环境                                │
+│   ┌────────────┐         ┌────────────────────┐              │
+│   │  RFID 标签 │ ─ 射频 ─▶│  InLayLink 读写器  │ ─ USB 串口 ─▶│
+│   └────────────┘         └────────────────────┘              │
+└──────────────────────────────────────────────────────────────┘
+                                  │  /dev/ttyUSB0
+                                  ▼
+┌──────────────────────────────────────────────────────────────┐
+│              InLay-RFID 应用程序  (Spring Boot)               │
+│                                                                │
+│   ┌────────────────────────────────────────────────────────┐ │
+│   │  ① RfidRunner    启动后自动执行                        │ │
+│   │     ├─ 注册"连上后自动开始盘点"的回调                  │ │
+│   │     └─ 启动后台重连服务                                │ │
+│   └────────────────────────────────────────────────────────┘ │
+│                              │                                 │
+│                              ▼                                 │
+│   ┌────────────────────────────────────────────────────────┐ │
+│   │  ② RfidService   核心服务（所有 RFID 操作的入口）      │ │
+│   │     ├─ 连接管理：连接 / 断开 / 自动重连 / 心跳检测     │ │
+│   │     ├─ 参数配置：天线功率、Q 值、Session              │ │
+│   │     ├─ 标签操作：持续盘点 / 单次盘点 / 读 / 写         │ │
+│   │     └─ 状态监听：onConnected / onDisconnected         │ │
+│   └────────────────────────────────────────────────────────┘ │
+│           │                              │                     │
+│           ▼                              ▼                     │
+│   ┌──────────────────┐         ┌────────────────────────────┐ │
+│   │ ③ RfidProperties │         │ ④ InLayLink RFID SDK       │ │
+│   │   读取 yml 配置  │         │   厂商提供的底层 SDK       │ │
+│   └──────────────────┘         └────────────────────────────┘ │
+│                                                                │
+│   ┌────────────────────────────────────────────────────────┐ │
+│   │  ⑤ RfidController  HTTP 接口（给前端调用）             │ │
+│   │     └─ 改天线功率、健康检查                            │ │
+│   └────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────┘
+            │                              │
+            ▼                              ▼
+   ┌─────────────────┐           ┌──────────────────┐
+   │ application.yml │           │  logs/*.log      │
+   │   (配置文件)    │           │   (按天滚动)     │
+   └─────────────────┘           └──────────────────┘
+```
+
+应用内部 5 个模块：
+
+| 模块 | 文件 | 职责 |
+|---|---|---|
+| 启动类 | `InLayRfidApplication.java` | Spring Boot 入口 |
+| 配置 | `config/RfidProperties.java` | 把 `application.yml` 映射成 Java 对象 |
+| 核心服务 | `service/RfidService.java` | 连接、重连、读卡、写卡、参数配置 |
+| 启动流程 | `runner/RfidRunner.java` | 启动后自动连接 + 开启持续盘点 |
+| REST 接口 | `controller/RfidController.java` | 给前端调用的 HTTP 接口 |
+
+---
+
+## 三、目录结构
 
 ```
 InLay-RFID/
-├── lib/                                  # SDK 本地依赖
 ├── src/main/java/com/cyu/inlayrfid/
-│   ├── InLayRfidApplication.java         # Spring Boot 启动类
-│   ├── config/RfidProperties.java        # application.yml 配置映射
-│   ├── service/RfidService.java          # 读写器核心服务
-│   └── runner/RfidRunner.java           # 持续盘点入口
+│   ├── InLayRfidApplication.java       启动类
+│   ├── config/RfidProperties.java      配置映射
+│   ├── service/RfidService.java        核心服务
+│   ├── runner/RfidRunner.java          启动流程
+│   └── controller/RfidController.java  REST 接口
 ├── src/main/resources/
-│   ├── application.yml                   # 配置（dev / prod profile）
-│   └── logback-spring.xml                # 日志配置（控制台 + 滚动文件）
-├── Dockerfile                            # Docker 多阶段构建
-├── .dockerignore
+│   ├── application.yml                 配置文件（串口、功率、重连）
+│   └── logback-spring.xml              日志配置
+├── lib/                                InLayLink SDK
+├── Dockerfile                          镜像构建
+├── deploy.sh                           一键部署脚本
 └── pom.xml
 ```
 
-## 快速开始
+---
+
+## 四、核心功能
+
+| 功能 | 说明 |
+|---|---|
+| 串口自动扫描 | `serial-port: auto` 自动扫所有端口 + 4 种波特率 |
+| 持续后台盘点 | 连上即开始，标签实时去重打印 |
+| 自动重连 | 1 秒一次心跳检测，掉线后台持续重试 |
+| 运行时改功率 | HTTP 接口动态修改，不用重启 |
+| 日志按天滚动 | 单文件 50MB，保留 3 天，自动压缩 |
+| Docker 部署 | 一键脚本，开机自启 |
+
+---
+
+## 五、快速开始
 
 ### 本地运行
 
@@ -34,237 +119,173 @@ mvn clean package -DskipTests
 java -jar target/InLay-RFID-1.0.0.jar
 ```
 
-日志会输出到控制台，同时写入 `./logs/rfid-yyyy-MM-dd.log`。
+日志输出到控制台 + `./logs/rfid-yyyy-MM-dd.log`。
 
-### Docker 部署
-
-#### 一键部署（推荐）
+### Docker 部署（生产环境推荐）
 
 ```bash
-# 构建 + 启动（首次部署）
-./deploy.sh
-
-# 常用命令
-./deploy.sh restart    # 代码改了，重启容器（不重新构建镜像）
-./deploy.sh stop       # 停止并删除容器
-./deploy.sh logs       # 实时查看容器日志
-./deploy.sh status     # 查看容器状态 + 日志文件
-./deploy.sh build      # 仅构建镜像，不启动
+./deploy.sh              # 构建 + 启动
+./deploy.sh restart      # 重启
+./deploy.sh stop         # 停止
+./deploy.sh logs         # 看日志
+./deploy.sh status       # 查状态
 ```
 
-脚本会自动完成：
-- 检查 Docker 已安装并运行
-- 设置 Docker 服务开机自启（`sudo systemctl enable docker`）
-- 创建宿主机日志目录 `/usr/log/rfid-logs`
-- 构建 Docker 镜像
-- 启动容器（`--restart=always` 开机自启）
-- 串口不存在时也不报错（容器内程序会后台重连）
+脚本会自动：检查 Docker → 设置 Docker 开机自启 → 创建日志目录 `/usr/log/rfid-logs` → 构建镜像 → 启动容器（`--restart=always`）→ 串口透传。
 
-**修改脚本顶部的 `SERIAL_DEVICE` / `LOG_DIR` 等变量可自定义配置。**
+**修改 `deploy.sh` 顶部的 `SERIAL_DEVICE`** 可换串口路径。
 
-#### 开机自启原理
+---
 
-```
-宿主机开机
-  └─ systemd 启动 docker 服务（已 enable）
-     └─ docker 自动拉起所有 --restart=always 的容器
-        └─ InLay-RFID 容器启动
-           └─ Java 程序后台重连读写器
-              └─ 读写器插上后自动连接 + 持续盘点
-```
+## 六、配置说明
 
-#### 手动部署（可选）
-
-```bash
-# 1. 构建镜像
-docker build -t inlay-rfid .
-
-# 2. 运行（关键：--device 把宿主机串口传进容器）
-docker run -d \
-  --name inlay-rfid \
-  --restart=always \
-  --device /dev/ttyUSB0 \
-  -v /usr/log/rfid-logs:/usr/log/rfid-logs \
-  -e SPRING_PROFILES_ACTIVE=prod \
-  -e RFID_SERIAL_PORT=/dev/ttyUSB0 \
-  inlay-rfid
-
-# 3. 查看日志
-docker logs -f inlay-rfid                       # 容器控制台日志
-ls /usr/log/rfid-logs/                          # 宿主机日志文件（按日期命名）
-tail -f /usr/log/rfid-logs/rfid-$(date +%F).log # 实时查看今天的日志
-```
-
-#### 日志兜底清理（可选）
-
-程序在跑时 logback 会自动清理 3 天前的日志。但如果程序长期不跑，日志会堆积。
-可以装一个 crontab 兜底：
-
-```bash
-sudo cp log-cleanup.sh /etc/cron.daily/inlay-rfid-log-cleanup
-sudo chmod +x /etc/cron.daily/inlay-rfid-log-cleanup
-```
-
-## 日志说明
-
-### 日志策略（`logback-spring.xml`）
-
-| 输出目标 | 级别 | 说明 |
-|---------|------|------|
-| 控制台 | DEBUG+ | 彩色，方便开发调试 |
-| 文件 | INFO+ | 异步写入，不阻塞主线程 |
-| 滚动策略 | 按天 + 按大小（50MB） | 当天超过 50MB 会切割 |
-| 保留时长 | **3 天** | 第 4 天自动清理 |
-| 总大小上限 | 500MB | 超过会从最老的开始删 |
-| 压缩 | `.log.gz` | 历史日志自动压缩 |
-
-### 日志路径
-
-| 环境 | 路径 | 配置方式 |
-|------|------|---------|
-| dev (本地) | `./logs/rfid-yyyy-MM-dd.log` | `logging.file.path: ./logs` |
-| prod (Docker) | `/usr/log/rfid-logs/rfid-yyyy-MM-dd.log` | `logging.file.path: /usr/log/rfid-logs`，挂载 `-v 宿主机:/usr/log/rfid-logs` |
-
-### 日志文件示例
-
-按日期命名，文件结构：
-
-```
-/usr/log/rfid-logs/
-├── rfid-2026-06-21.log     # 3 天前（明天被自动清理）
-├── rfid-2026-06-22.log     # 2 天前
-└── rfid-2026-06-23.log     # 今天（当前活动文件）
-```
-
-跨天时自动新建文件，不需要重启程序。
-
-## 配置说明
-
-`application.yml` 用 Spring profile 区分环境：
+`application.yml`：
 
 ```yaml
-spring:
-  profiles:
-    active: dev    # 本地开发用 dev，Docker 用 prod
-
 rfid:
-  serial-port: auto          # auto = 自动扫描所有串口
+  serial-port: auto              # auto 或 /dev/ttyUSB0 / COM3
   baud-rate: 115200
+
   reconnect:
-    enabled: true
-    interval-seconds: 5
-    max-attempts: 0           # 0 = 无限重试
-  antennas:
-    - id: 0
-      power: 2000             # 20 dBm
-    - id: 1
-      power: 2000
-    - id: 2
-      power: 2000
-    - id: 3
-      power: 2000
+    enabled: true                # 开启自动重连
+    interval-seconds: 5          # 重试间隔
+    max-attempts: 0              # 0 = 无限
+
+  antennas:                      # 每根天线独立功率
+    - { id: 0, power: 1500 }     # 单位 0.1 dBm，1500 = 15 dBm
+    - { id: 1, power: 1500 }
+    - { id: 2, power: 1500 }
+    - { id: 3, power: 1500 }
+
+  query:
+    session: S0
+    target: AB
+
+  q:
+    init: 5
+    max: 9
+    min: 0
 ```
 
 ### 环境变量覆盖
 
-Docker 部署时可以用 `-e` 覆盖任意配置：
+Docker 启动时用 `-e` 覆盖：
 
 ```bash
-docker run -d \
-  --device /dev/ttyUSB0 \
-  -v /usr/log/rfid-logs:/usr/log/rfid-logs \
-  -e RFID_SERIAL_PORT=/dev/ttyUSB0 \
-  -e RFID_ANTENNAS_0_POWER=2500 \
-  -e RFID_RECONNECT_INTERVAL_SECONDS=3 \
-  inlay-rfid
+-e RFID_SERIAL_PORT=/dev/ttyUSB1
+-e RFID_ANTENNAS_0_POWER=2000
+-e RFID_RECONNECT_INTERVAL_SECONDS=3
 ```
 
-## Docker 部署注意
+### Profile
 
-### 1. 串口权限
+- `dev`：本地开发，日志在 `./logs`
+- `prod`：Docker 部署，日志在 `/usr/log/rfid-logs`
 
-容器需要访问宿主机的 `/dev/ttyUSB0`，**必须用 `--device` 传进去**：
+切换：`SPRING_PROFILES_ACTIVE=prod`
+
+---
+
+## 七、日志
+
+| 项 | 值 |
+|---|---|
+| 路径（dev） | `./logs/rfid-yyyy-MM-dd.log` |
+| 路径（prod） | `/usr/log/rfid-logs/rfid-yyyy-MM-dd.log` |
+| 单文件上限 | 50 MB |
+| 保留天数 | 3 天 |
+| 总大小上限 | 500 MB |
+| 历史压缩 | `.log.gz` |
+
+关键日志示例：
+
+```
+INFO  读写器连接成功: /dev/ttyUSB0 @ 115200
+INFO  天线 ANT0 配置成功: 15.0 dBm
+INFO  持续盘点已启动，等待标签...
+INFO  【新标签】 EPC=E20000172211...  RSSI=-45 dBm  天线=0
+WARN  读写器已断开 (/dev/ttyUSB0), 后台持续重连中...
+```
+
+---
+
+## 八、REST 接口
+
+默认端口 `8080`。
+
+| 接口 | 方法 | 说明 |
+|---|---|---|
+| `/api/rfid/health` | GET | 健康检查 |
+| `/api/rfid/antennas/{antId}/power` | POST | 改单根天线功率 |
+| `/api/rfid/antennas/power` | POST | 改所有天线功率 |
+
+功率单位统一用整数 dBm（0~33），后端自动换算。
 
 ```bash
-# 正确写法
-docker run --device /dev/ttyUSB0 inlay-rfid
-
-# 错误写法（容器里看不到串口）
-docker run inlay-rfid
+curl -X POST http://localhost:8080/api/rfid/antennas/0/power \
+  -H "Content-Type: application/json" \
+  -d '{"power": 20}'
 ```
 
-如果读写器是 USB CDC 设备（如 `/dev/ttyACM0`），同样传：
+---
 
-```bash
-docker run --device /dev/ttyACM0 inlay-rfid
-```
+## 九、二次开发
 
-### 2. 日志持久化
-
-容器删除后日志会丢，**必须挂载 volume**：
-
-```bash
--v /usr/log/rfid-logs:/usr/log/rfid-logs
-```
-
-### 3. 容器自动重启
-
-```bash
---restart=unless-stopped
-```
-
-读写器掉线/重启会自动重连，但容器本身崩溃时也能自动拉起。
-
-### 4. 时区
-
-Dockerfile 里已经设置 `TZ=Asia/Shanghai`，日志时间戳是东八区。
-
-## RfidService 核心 API
+**业务逻辑加在哪？** 打开 `RfidRunner.startContinuousInventory()`，回调里写：
 
 ```java
-// 持续盘点（自动启动）
-rfidService.addConnectionListener(new RfidService.ConnectionListener() {
-    @Override public void onConnected() {
-        // 连接成功后回调
-    }
-    @Override public void onDisconnected() {
-        // 断线时回调
+rfidService.setInventoryCallback(tag -> {
+    String epc = tag.getEpc();
+    if (seenEpcs.add(epc)) {
+        log.info("【新标签】 EPC={}", epc);
+        // ⬇️ 在这里加业务（写库、推接口、报警）
     }
 });
-
-// 手动盘点
-List<InventoryTag> tags = rfidService.inventoryFor(10);
-
-// 读标签
-rfidService.selectTag(epc);
-ReadTag result = rfidService.readTag(MemBank.EPC, 2, 6);
-
-// 写标签
-rfidService.writeTag(MemBank.EPC, newEpc, 2, 6);
 ```
 
-## 常见问题
+**核心 API**（`RfidService`）：
 
-### Q: Docker 里访问不到串口
-```bash
-# 宿主机检查
-ls /dev/ttyUSB*
-# 用 --device 传进容器
-docker run --device /dev/ttyUSB0 inlay-rfid
+```java
+// ── 持续盘点（生产环境用，项目默认就是这个） ─────────────
+rfidService.setInventoryCallback(tag -> { ... });          // 注册标签回调
+rfidService.startInventory(onSuccess, onFailure);          // 启动后一直跑
+rfidService.stopInventory(onSuccess, onFailure);           // 停止
+
+// ── 限时盘点（临时 / 工具场景，比如"扫一下"按钮） ────────
+rfidService.inventoryFor(10);                              // 阻塞 10 秒，返回 List<InventoryTag>
+
+// ── 状态与配置 ─────────────────────────────────────
+rfidService.isConnected();                                 // 连接状态
+rfidService.setAntennaPower(0, 2000);                      // 改天线功率（运行时）
+
+// ── 单标签读写 ─────────────────────────────────────
+rfidService.readTag(MemBank.EPC, 2, 6);                    // 读标签
+rfidService.writeTag(MemBank.EPC, newEpc, 2, 6);           // 写标签
 ```
 
-### Q: 日志没写入文件
-```bash
-# 检查挂载点权限
-docker exec inlay-rfid ls -la /usr/log/rfid-logs
-# 宿主机日志目录权限
-sudo chmod 777 /usr/log/rfid-logs
-```
+> 项目启动后会通过 `startInventory()` 进入**持续盘点**状态，SDK 内部循环读卡，直到 `stopInventory()` 或断开连接。`inventoryFor(N)` 是"读 N 秒后自动停"的便利方法，**只在临时/工具场景下用**，生产环境不要拿它替代持续盘点。
 
-### Q: 自动扫描不到串口
-```bash
-# 宿主机检查
-ls /dev/ttyUSB* /dev/ttyACM*
-# 如果是固定路径，直接指定
-docker run -e RFID_SERIAL_PORT=/dev/ttyUSB0 --device /dev/ttyUSB0 inlay-rfid
-```
+---
+
+## 十、常见问题
+
+**Docker 容器看不到串口**
+必须用 `--device` 透传，`deploy.sh` 已处理。
+
+**日志没写到文件**
+检查 `-v /usr/log/rfid-logs:/usr/log/rfid-logs` 挂载，目录权限 777。
+
+**自动扫描扫不到读写器**
+直接指定路径：`-e RFID_SERIAL_PORT=/dev/ttyUSB0`，并确认 `--device` 已传。
+
+**读不到标签**
+检查：天线接好、标签在 5~50cm 范围内、标签是 UHF Gen2、功率够（可调到 2000+）。
+
+**Docker 日志时间慢 8 小时**
+Dockerfile 已设 `TZ=Asia/Shanghai`，自定义镜像注意保留。
+
+---
+
+## 十一、技术栈
+
+Java 8 · Spring Boot 2.4.2 · InLayLink RFID SDK 2.25.05.191 · Logback · Maven · Docker

@@ -24,10 +24,10 @@ public class RfidProperties {
 
     /** 天线配置列表（每根天线独立功率） */
     private List<Antenna> antennas = new ArrayList<>(Arrays.asList(
-            new Antenna(0, 2000),
-            new Antenna(1, 2000),
-            new Antenna(2, 2000),
-            new Antenna(3, 2000)
+            new Antenna(0, 1500),
+            new Antenna(1, 1500),
+            new Antenna(2, 1500),
+            new Antenna(3, 1500)
     ));
 
     /** 查询配置 */
