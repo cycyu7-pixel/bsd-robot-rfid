@@ -132,29 +132,129 @@ public class RfidService {
     }
 
     /**
-     * 自动发现：扫描所有串口，每个端口尝试多种波特率，找到第一个能连上的。
-     * 内部不打 INFO 日志，避免重连时刷屏；成功/失败由调用方感知。
+     * 列出系统所有串口及其描述信息（用于调试）。
+     */
+    public static List<String> scanSerialPortsDetailed() {
+        List<String> info = new java.util.ArrayList<>();
+        for (SerialPort sp : SerialPort.getCommPorts()) {
+            info.add(String.format("%s [%s] (%s)",
+                    sp.getSystemPortName(),
+                    sp.getPortDescription(),
+                    sp.getDescriptivePortName()));
+        }
+        return info;
+    }
+
+    /**
+     * 判断这个串口对应的 USB 设备是否是 InlayLink 读写器。
+     * <p>
+     * 检测策略（按可靠性从高到低）：
+     *  1. Linux: 读 /sys/class/tty/{name}/device/.../{idVendor,idProduct}
+     *     如果是 2fe3:0100 → 100% 确认是 InlayLink RFID
+     *  2. 端口描述名包含 "inlay" / "rfid" / "nordic" 关键字
+     */
+    private boolean isInlayLinkPort(SerialPort sp) {
+        String name = sp.getSystemPortName();
+        String desc = (sp.getPortDescription() + " " + sp.getDescriptivePortName()).toLowerCase();
+
+        // 策略 1：Linux 通过 sysfs 读 USB VID/PID（最可靠）
+        if (System.getProperty("os.name").toLowerCase().contains("linux")) {
+            try {
+                String[] vidPid = readUsbVidPid(name);
+                if (vidPid != null) {
+                    String vid = vidPid[0].toLowerCase();
+                    String pid = vidPid[1].toLowerCase();
+                    log.debug("串口 {} USB VID:PID = {}:{}", name, vid, pid);
+                    // InlayLink 读写器: VID=2fe3 (NordicSemiconductor)
+                    // 只要 VID 是 2fe3 就当作 InlayLink 设备
+                    if ("2fe3".equals(vid)) {
+                        return true;
+                    }
+                    // 已经成功读到 VID/PID 但不匹配 → 明确不是 InlayLink
+                    return false;
+                }
+            } catch (Exception e) {
+                log.debug("读取 USB VID/PID 失败 ({}): {}", name, e.getMessage());
+                // 读不到就 fallback 到描述名匹配
+            }
+        }
+
+        // 策略 2：描述名包含 inlay/rfid/nordic
+        return desc.contains("inlay") || desc.contains("rfid") || desc.contains("nordic");
+    }
+
+    /**
+     * Linux 下通过 sysfs 读串口对应 USB 设备的 VID/PID。
+     * 路径示例：/sys/class/tty/ttyACM2/device/../idVendor
+     *
+     * @return [vid, pid] 或 null（不是 USB 设备/读不到）
+     */
+    private String[] readUsbVidPid(String portName) {
+        try {
+            // 不带 /dev/ 前缀
+            String shortName = portName.startsWith("/dev/")
+                    ? portName.substring(5) : portName;
+            java.io.File devLink = new java.io.File("/sys/class/tty/" + shortName + "/device");
+            if (!devLink.exists()) return null;
+
+            // /sys/class/tty/ttyACM2/device 是 tty 子设备，要再往上找一级才有 idVendor
+            // 用 canonicalPath 解析符号链接到真实路径，然后逐级往上找
+            java.io.File current = devLink.getCanonicalFile();
+            for (int i = 0; i < 6 && current != null; i++) {
+                java.io.File vidFile = new java.io.File(current, "idVendor");
+                java.io.File pidFile = new java.io.File(current, "idProduct");
+                if (vidFile.exists() && pidFile.exists()) {
+                    String vid = new String(java.nio.file.Files.readAllBytes(vidFile.toPath())).trim();
+                    String pid = new String(java.nio.file.Files.readAllBytes(pidFile.toPath())).trim();
+                    return new String[]{vid, pid};
+                }
+                current = current.getParentFile();
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /**
+     * 自动发现：
+     * 1. 先在所有串口里挑出 InlayLink 设备（按 USB VID:PID 识别，不依赖端口名）
+     * 2. 对匹配的端口尝试常用波特率连接
+     * 3. 如果一个 InlayLink 设备都没找到，fallback 到遍历所有串口
      *
      * @return 连接成功的串口路径，失败返回 null
      */
     public String autoConnect() {
-        List<String> ports = scanSerialPorts();
-        if (ports.isEmpty()) {
+        SerialPort[] allPorts = SerialPort.getCommPorts();
+        if (allPorts.length == 0) {
             return null;
         }
 
-        for (String port : ports) {
-            // 跳过系统保留端口
-            if (port.contains("Bluetooth") || port.contains("debug-console")) {
-                continue;
+        // 第一轮：只挑 InlayLink 设备
+        List<SerialPort> candidates = new java.util.ArrayList<>();
+        for (SerialPort sp : allPorts) {
+            if (isInlayLinkPort(sp)) {
+                candidates.add(sp);
+                log.info("识别到 InlayLink 读写器: {} [{}]",
+                        sp.getSystemPortName(), sp.getPortDescription());
             }
+        }
 
+        // 第二轮：如果没匹配到，fallback 遍历所有非系统端口
+        if (candidates.isEmpty()) {
+            log.warn("未通过 USB VID/PID 识别到 InlayLink 设备，尝试遍历所有串口...");
+            for (SerialPort sp : allPorts) {
+                String name = sp.getSystemPortName();
+                if (name.contains("Bluetooth") || name.contains("debug-console")) continue;
+                candidates.add(sp);
+            }
+        }
+
+        for (SerialPort sp : candidates) {
+            String port = sp.getSystemPortName();
             for (int baud : COMMON_BAUD_RATES) {
                 if (connect(port, baud)) {
                     actualSerialPort = port;
                     return port;
                 }
-                // 快速失败，不等待
                 try { TimeUnit.MILLISECONDS.sleep(200); } catch (InterruptedException ignored) {}
             }
         }

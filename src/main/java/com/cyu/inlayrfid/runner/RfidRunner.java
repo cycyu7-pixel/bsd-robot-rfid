@@ -48,8 +48,11 @@ public class RfidRunner implements CommandLineRunner {
         log.info("========================================");
         log.info("  InLayLink RFID Reader - 启动中...");
         if (autoMode) {
-            log.info("  串口: auto (自动扫描所有串口 + 多波特率)");
-            log.info("  当前可用串口: {}", RfidService.scanSerialPorts());
+            log.info("  串口: auto (按 USB VID:PID 识别 InlayLink 设备)");
+            log.info("  当前可用串口:");
+            for (String info : RfidService.scanSerialPortsDetailed()) {
+                log.info("    - {}", info);
+            }
         } else {
             log.info("  串口: {}", properties.getSerialPort());
             log.info("  波特率: {}", properties.getBaudRate());
