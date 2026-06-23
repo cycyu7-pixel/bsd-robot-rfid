@@ -1,26 +1,27 @@
 # ============================================================
 # 多阶段构建：第一阶段构建 fat jar，第二阶段只运行
-# 镜像大小约 200MB（基于 openjdk:8-jre-slim）
+# 镜像大小约 250MB（基于 eclipse-temurin:8-jre-jammy）
+# 注：不用 openjdk:8 因其已停止维护，部分镜像源 403 拒绝拉取
 # ============================================================
 
 # ---------- Stage 1: Build ----------
-FROM maven:3.8-openjdk-8 AS builder
+FROM maven:3.8-eclipse-temurin-8 AS builder
 WORKDIR /build
 
 # 先单独拷 pom，利用 Docker 缓存加速依赖下载
 COPY pom.xml .
-RUN mvn -B -q dependency:go-offline
+COPY lib ./lib
+RUN mvn -B -q dependency:go-offline || true
 
 # 拷源码并构建
 COPY src ./src
-COPY lib ./lib
 RUN mvn -B -q clean package -DskipTests
 
 # ---------- Stage 2: Runtime ----------
-FROM openjdk:8-jre-slim
+FROM eclipse-temurin:8-jre-jammy
 LABEL maintainer="InLay-RFID"
 
-# 装一些调试工具（ls /dev/tty* 用），不需要可删
+# 装一些调试工具（lsusb / ls /dev/tty* 用），不需要可删
 RUN apt-get update \
     && apt-get install -y --no-install-recommends usbutils \
     && rm -rf /var/lib/apt/lists/*
