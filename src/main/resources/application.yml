@@ -90,5 +90,5 @@ logging:
     path: /usr/log/rfid-logs
 
 rfid:
-  # Linux 下固定串口（Docker 也要把 /dev/ttyUSB0 传进去）
-  serial-port: /dev/ttyUSB0
+  # Linux 下也用 auto 自动扫描（兼容 /dev/ttyUSB0、/dev/ttyACM0 等不同设备名）
+  serial-port: auto

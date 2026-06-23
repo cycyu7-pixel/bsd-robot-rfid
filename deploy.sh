@@ -105,25 +105,27 @@ stop_container() {
 run_container() {
     step "启动新容器: $CONTAINER_NAME"
 
-    # 检查串口设备是否存在，存在则传进容器
-    DEVICE_FLAG=""
-    if [ -e "$SERIAL_DEVICE" ]; then
-        DEVICE_FLAG="--device $SERIAL_DEVICE"
-    else
-        warn "串口 $SERIAL_DEVICE 不存在，容器仍会启动（后台重连，插上后会自动连）"
-    fi
-
+    # ============================================================
+    # 关键：容器访问宿主机串口的两种方式
+    # ------------------------------------------------------------
+    # 方式 A（--device）：只能挂载启动时已存在的设备，拔插后断
+    # 方式 B（--privileged + -v /dev）：挂载整个 /dev 目录
+    #   优点：容器启动后插拔读写器也能感知到
+    #   缺点：特权模式，容器有宿主机 root 权限
+    # 这里默认用方式 B，因为读写器经常拔插
+    # ============================================================
     docker run -d \
         --name "$CONTAINER_NAME" \
         --restart=always \
-        $DEVICE_FLAG \
+        --privileged \
+        -v /dev:/dev \
         -v "$LOG_DIR":"$LOG_DIR" \
         -e SPRING_PROFILES_ACTIVE="$SPRING_PROFILE" \
         -e RFID_SERIAL_PORT="$SERIAL_DEVICE" \
         -e TZ=Asia/Shanghai \
         "$IMAGE_NAME:$IMAGE_TAG"
 
-    info "容器已启动（--restart=always，开机自启）"
+    info "容器已启动（特权模式 + 挂载 /dev，支持热插拔）"
 }
 
 show_status() {
