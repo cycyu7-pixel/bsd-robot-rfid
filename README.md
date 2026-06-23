@@ -28,7 +28,7 @@
 
 ## 1. 这个项目做什么
 
-跟博斯登机器人/产线上的 **InLayLink RFID 读写器**对话，做三件事：
+ **InLayLink RFID 读写器**对话，做三件事：
 
 | 它在做的事 | 结果 |
 |--------|--------|
@@ -717,9 +717,9 @@ public ReadTag readTag(...) {
 
 ## 项目信息
 
-| 项 | 值 |
-|---|---|
-| 仓库 | https://github.com/cycyu7-pixel/bsd-robot-rfid |
-| 业务方 | 博斯登（BSD） |
+| 项 | 值                                                           |
+|---|-------------------------------------------------------------|
+| 仓库 | https://github.com/cycyu7-pixel/bsd-robot-rfid              |
+| 业务方 | BSD                                                         |
 | 技术栈 | Java 8 + Spring Boot 2.4 + InLayLink RFID SDK V2.2 + Docker |
-| 部署 | Linux x86_64 / Docker |
+| 部署 | Linux x86_64 / Docker                                       |
