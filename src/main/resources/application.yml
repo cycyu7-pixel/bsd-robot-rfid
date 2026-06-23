@@ -1,0 +1,94 @@
+# ============================================================
+# InLayLink RFID Reader 配置
+# ============================================================
+server:
+  port: 8080
+
+spring:
+  application:
+    name: InLay-RFID
+  profiles:
+    # 默认开发环境，Docker 部署时通过 SPRING_PROFILES_ACTIVE=prod 切换
+    active: dev
+
+# 日志路径（logback-spring.xml 中通过 ${logPath} 引用）
+logging:
+  file:
+    # dev profile 下用本地路径，prod profile 下用 /usr/log/rfid-logs（Docker 挂载点）
+    path: ./logs
+
+rfid:
+  # 串口路径
+  #   auto                       → 自动扫描所有串口 + 多种波特率（推荐）
+  #   /dev/cu.usbmodemXXXX       → Mac: 固定串口
+  #   /dev/ttyUSB0               → Linux: 固定串口
+  #   COM3                        → Windows: 固定串口
+  serial-port: auto
+  # 串口波特率（serial-port=auto 时此项被忽略，会自动尝试 115200/57600/38400/9600）
+  baud-rate: 115200
+
+  # 连接重试策略：读写器没插上时，程序不退出，而是后台持续尝试连接
+  reconnect:
+    # 是否开启自动重连（启动 + 运行中掉线都会触发）
+    enabled: true
+    # 重连间隔（秒）
+    interval-seconds: 5
+    # 最大尝试次数，<= 0 表示无限重试
+    max-attempts: 0
+
+  # 天线配置
+  # 你的读写器可能接了多根天线（ANT0/1/2/3），把要启用的天线都配上
+  antennas:
+    - id: 0
+      power: 1500
+    - id: 1
+      power: 1500
+    - id: 2
+      power: 1500
+    - id: 3
+      power: 1500
+
+  # 查询配置
+  query:
+    session: S0
+    target: AB
+
+  # Q 值配置
+  q:
+    init: 5
+    max: 9
+    min: 0
+
+# ============================================================
+# Profile: dev (本地开发)
+# ============================================================
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+logging:
+  file:
+    path: ./logs
+
+rfid:
+  serial-port: auto
+
+# ============================================================
+# Profile: prod (Docker / Linux 部署)
+# ============================================================
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+logging:
+  file:
+    # Docker 里挂载到宿主机：-v /usr/log/rfid-logs:/usr/log/rfid-logs
+    path: /usr/log/rfid-logs
+
+rfid:
+  # Linux 下固定串口（Docker 也要把 /dev/ttyUSB0 传进去）
+  serial-port: /dev/ttyUSB0

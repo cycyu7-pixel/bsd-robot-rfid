@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Logback 配置（纯 logback，不依赖 Spring Boot 扩展转换器）
+    =============================================================
+    - 控制台：彩色 ANSI 输出，DEBUG 及以上
+    - 文件：按日期命名，保留 3 天，INFO 及以上，异步写入
+    - 文件路径：/usr/log/rfid-logs/rfid-yyyy-MM-dd.log（Docker 部署用，挂载 volume 即可持久化）
+
+    说明：
+      %clr / %wEx 是 Spring Boot 扩展，需要引入
+      org/springframework/boot/logging/logback/defaults.xml 才能用。
+      为避免依赖冲突，这里改用 ANSI 转义码 + 纯 logback 转换符 %ex。
+-->
+<configuration>
+
+    <!-- Spring Boot 注入的属性，能读到 application.yml 里的配置 -->
+    <springProperty scope="context" name="logPath" source="logging.file.path"
+                    defaultValue="/usr/log/rfid-logs"/>
+
+    <!-- 控制台输出格式：用 logback 内置 %highlight 自动着色，不依赖 ANSI 转义码
+         （某些终端不解析 \x1b 转义，会显示成字面文本） -->
+    <property name="CONSOLE_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %highlight(%-5level) [%thread] %cyan(%logger{36}) - %msg%n"/>
+
+    <!-- 文件输出格式（无颜色，便于检索） -->
+    <property name="FILE_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"/>
+
+    <!-- ========== 控制台 Appender ========== -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${CONSOLE_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- ========== 文件 Appender（按日期命名，保留 3 天） ========== -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <encoder>
+            <pattern>${FILE_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <!-- 活动文件名（当天）：rfid-2026-06-23.log -->
+            <fileNamePattern>${logPath}/rfid-%d{yyyy-MM-dd}.log</fileNamePattern>
+            <!-- 保留 3 天 -->
+            <maxHistory>3</maxHistory>
+            <!-- 总大小上限：超过会删除最老的 -->
+            <totalSizeCap>500MB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <!-- ========== 异步包装文件写入（不阻塞主线程） ========== -->
+    <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <discardingThreshold>0</discardingThreshold>
+        <queueSize>512</queueSize>
+        <neverBlock>true</neverBlock>
+        <appender-ref ref="FILE"/>
+    </appender>
+
+    <!-- ========== 各模块日志级别 ========== -->
+    <!-- 项目自身代码 -->
+    <logger name="com.cyu.inlayrfid" level="DEBUG"/>
+    <!-- SDK 内部日志 -->
+    <logger name="com.inlaylink" level="INFO"/>
+    <!-- jSerialComm 底层日志 -->
+    <logger name="com.fazecast" level="WARN"/>
+    <!-- Spring 框架 -->
+    <logger name="org.springframework" level="INFO"/>
+
+    <!-- ========== Root：同时输出到控制台和文件 ========== -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE"/>
+    </root>
+
+</configuration>
