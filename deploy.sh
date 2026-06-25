@@ -23,6 +23,9 @@ SERIAL_DEVICE="/dev/ttyUSB0"
 # 日志挂载路径（宿主机侧）
 LOG_DIR="/usr/log/rfid-logs"
 
+# 服务端口映射（宿主机端口:容器端口），容器内 Spring Boot 默认 8080
+APP_PORT="8080"
+
 # Spring profile（prod = Docker 部署）
 SPRING_PROFILE="prod"
 
@@ -131,6 +134,7 @@ run_container() {
         --name "$CONTAINER_NAME" \
         --restart=always \
         --privileged \
+        -p "$APP_PORT":8080 \
         -v /dev:/dev \
         -v "$LOG_DIR":"$LOG_DIR" \
         -e SPRING_PROFILES_ACTIVE="$SPRING_PROFILE" \
@@ -138,6 +142,7 @@ run_container() {
         "$IMAGE_NAME:$IMAGE_TAG"
 
     info "容器已启动（特权模式 + 挂载 /dev，支持热插拔）"
+    info "服务端口: 宿主机 $APP_PORT -> 容器 8080"
 }
 
 show_status() {
