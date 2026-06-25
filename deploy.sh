@@ -26,6 +26,12 @@ LOG_DIR="/usr/log/rfid-logs"
 # Spring profile（prod = Docker 部署）
 SPRING_PROFILE="prod"
 
+# Docker 构建基础镜像
+# 服务器访问 Docker Hub 超时时，默认走镜像代理；如需切回官方源，可执行：
+#   MAVEN_IMAGE=maven:3.8-eclipse-temurin-8 RUNTIME_IMAGE=eclipse-temurin:8-jre-jammy ./deploy.sh
+MAVEN_IMAGE="${MAVEN_IMAGE:-docker.1ms.run/library/maven:3.8-eclipse-temurin-8}"
+RUNTIME_IMAGE="${RUNTIME_IMAGE:-docker.1ms.run/library/eclipse-temurin:8-jre-jammy}"
+
 # -----------------------------------------------------------------
 
 # 颜色输出
@@ -90,7 +96,12 @@ create_log_dir() {
 
 build_image() {
     step "构建 Docker 镜像: $IMAGE_NAME:$IMAGE_TAG"
-    docker build -t "$IMAGE_NAME:$IMAGE_TAG" .
+    info "构建镜像源: MAVEN_IMAGE=$MAVEN_IMAGE"
+    info "运行镜像源: RUNTIME_IMAGE=$RUNTIME_IMAGE"
+    docker build \
+        --build-arg MAVEN_IMAGE="$MAVEN_IMAGE" \
+        --build-arg RUNTIME_IMAGE="$RUNTIME_IMAGE" \
+        -t "$IMAGE_NAME:$IMAGE_TAG" .
     info "镜像构建完成"
 }
 
