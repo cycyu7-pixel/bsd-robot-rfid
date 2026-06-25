@@ -18,7 +18,7 @@ RUN mkdir -p /root/.m2 \
   <mirrors>
     <mirror>
       <id>aliyunmaven</id>
-      <mirrorOf>*</mirrorOf>
+      <mirrorOf>*,!project-local</mirrorOf>
       <name>阿里云公共仓库</name>
       <url>https://maven.aliyun.com/repository/public</url>
     </mirror>
