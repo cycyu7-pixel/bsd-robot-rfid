@@ -36,6 +36,15 @@ rfid:
     # 最大尝试次数，<= 0 表示无限重试
     max-attempts: 0
 
+  # 盘点配置
+  inventory:
+    # 读写器连接成功后是否自动开始读取；设为 false 时需要页面手动点开始
+    auto-start: true
+    # 是否开启读取看门狗：读取中长时间没有任何标签回调时，自动重启盘点
+    watchdog-enabled: true
+    # 读取中超过多少秒没有任何标签回调，就自动重启盘点
+    no-tag-timeout-seconds: 10
+
   # 天线配置
   # 你的读写器可能接了多根天线（ANT0/1/2/3），把要启用的天线都配上
   antennas:

@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BSD Robot RFID 控制台</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f5f7fb; color: #1f2937; }
+        header { background: linear-gradient(135deg, #1e3a8a, #2563eb); color: #fff; padding: 22px 28px; box-shadow: 0 6px 20px rgba(37, 99, 235, .18); }
+        header h1 { margin: 0; font-size: 24px; letter-spacing: .5px; }
+        header p { margin: 8px 0 0; opacity: .9; }
+        main { padding: 22px; max-width: 1320px; margin: 0 auto; }
+        .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+        .card { background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 4px 18px rgba(15, 23, 42, .06); border: 1px solid #e5e7eb; }
+        .card h2 { margin: 0 0 14px; font-size: 17px; }
+        .metric { display: flex; flex-direction: column; gap: 7px; }
+        .metric .label { color: #6b7280; font-size: 13px; }
+        .metric .value { font-size: 24px; font-weight: 700; word-break: break-all; }
+        .badge { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; }
+        .badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+        .ok { color: #047857; background: #d1fae5; }
+        .warn { color: #b45309; background: #fef3c7; }
+        .bad { color: #b91c1c; background: #fee2e2; }
+        .muted { color: #4b5563; background: #e5e7eb; }
+        .section { margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .controls { display: flex; flex-wrap: wrap; gap: 10px; }
+        button { border: 0; border-radius: 10px; padding: 10px 14px; font-weight: 700; cursor: pointer; color: #fff; background: #2563eb; transition: .15s; }
+        button:hover { filter: brightness(.96); transform: translateY(-1px); }
+        button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+        button.secondary { background: #4b5563; }
+        button.success { background: #059669; }
+        button.danger { background: #dc2626; }
+        button.warning { background: #d97706; }
+        .form-row { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+        input[type="number"], input[type="range"] { width: 100%; }
+        input[type="number"] { border: 1px solid #d1d5db; border-radius: 9px; padding: 9px 10px; font-size: 14px; max-width: 110px; }
+        input[type="range"] { accent-color: #2563eb; }
+        .antenna-list { display: grid; gap: 10px; }
+        .antenna { display: grid; grid-template-columns: 72px 1fr 80px 72px; gap: 10px; align-items: center; padding: 10px; border: 1px solid #e5e7eb; border-radius: 10px; background: #f9fafb; }
+        .hint { font-size: 13px; color: #6b7280; line-height: 1.5; }
+        .message { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #eff6ff; color: #1d4ed8; display: none; }
+        .message.show { display: block; }
+        .table-card { margin-top: 16px; }
+        .table-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+        table { width: 100%; border-collapse: collapse; background: #fff; }
+        th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid #e5e7eb; font-size: 14px; }
+        th { background: #f9fafb; color: #374151; position: sticky; top: 0; z-index: 1; }
+        tbody tr.new-row { animation: flash 1.1s ease; }
+        @keyframes flash { from { background: #dcfce7; } to { background: transparent; } }
+        .table-wrap { max-height: 520px; overflow: auto; border: 1px solid #e5e7eb; border-radius: 12px; }
+        .empty { text-align: center; color: #6b7280; padding: 38px; }
+        @media (max-width: 980px) { .grid { grid-template-columns: repeat(2, 1fr); } .section { grid-template-columns: 1fr; } }
+        @media (max-width: 640px) { main { padding: 12px; } .grid { grid-template-columns: 1fr; } .antenna { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+<header>
+    <h1>BSD Robot RFID 控制台</h1>
+    <p>控制读取开关、调节天线功率、实时查看新读取到的 EPC。</p>
+</header>
+<main>
+    <section class="grid">
+        <div class="card metric"><span class="label">服务状态</span><span id="health" class="badge muted">检查中</span></div>
+        <div class="card metric"><span class="label">读写器连接</span><span id="connected" class="badge muted">未知</span></div>
+        <div class="card metric"><span class="label">读取状态</span><span id="reading" class="badge muted">未知</span></div>
+        <div class="card metric"><span class="label">当前串口</span><span id="serial" class="value">-</span></div>
+        <div class="card metric"><span class="label">总读取次数</span><span id="totalReads" class="value">0</span></div>
+        <div class="card metric"><span class="label">不同 EPC 数量</span><span id="uniqueCount" class="value">0</span></div>
+        <div class="card metric"><span class="label">最新序号</span><span id="latestSeq" class="value">0</span></div>
+        <div class="card metric"><span class="label">页面内显示</span><span id="displayCount" class="value">0</span></div>
+        <div class="card metric"><span class="label">最后标签回调</span><span id="lastCallback" class="value">-</span></div>
+        <div class="card metric"><span class="label">无回调时长</span><span id="callbackAgo" class="value">-</span></div>
+    </section>
+
+    <section class="section">
+        <div class="card">
+            <h2>读取控制</h2>
+            <div class="controls">
+                <button id="startBtn" class="success" onclick="startReading()">开始读取</button>
+                <button id="stopBtn" class="warning" onclick="stopReading()">停止读取</button>
+                <button class="secondary" onclick="restartReading()">重启读取</button>
+                <button class="danger" onclick="clearTags()">清空 EPC 记录</button>
+                <button class="secondary" onclick="refreshAll()">手动刷新</button>
+            </div>
+            <p class="hint">清空 EPC 记录后，之前已经读过的标签再次出现时，会重新作为“新标签”显示。</p>
+            <div id="controlMsg" class="message"></div>
+        </div>
+
+        <div class="card">
+            <h2>统一功率调节</h2>
+            <div class="form-row">
+                <input id="allPowerRange" type="range" min="0" max="33" value="18" oninput="syncAllPower(this.value)">
+                <input id="allPower" type="number" min="0" max="33" value="18" oninput="syncAllPower(this.value)">
+                <button onclick="setAllPower()">应用全部</button>
+            </div>
+            <p class="hint">前端输入单位是 dBm，范围 0~33。建议：近距离 15~18，常规 18~20，远距离 25+。</p>
+        </div>
+    </section>
+
+    <section class="card table-card">
+        <div class="table-head">
+            <h2>天线功率</h2>
+            <span class="hint">单根天线也可以独立修改</span>
+        </div>
+        <div id="antennaList" class="antenna-list"></div>
+    </section>
+
+    <section class="card table-card">
+        <div class="table-head">
+            <h2>新读取 EPC</h2>
+            <span class="hint">页面每 500ms 增量刷新，最多显示最近 300 条</span>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                <tr><th style="width:190px">时间</th><th>EPC</th><th style="width:120px">RSSI</th><th style="width:90px">天线</th></tr>
+                </thead>
+                <tbody id="tagBody"><tr><td colspan="4" class="empty">等待标签...</td></tr></tbody>
+            </table>
+        </div>
+    </section>
+</main>
+
+<script>
+    let lastSeq = 0;
+    let rowCount = 0;
+    const MAX_ROWS = 300;
+
+    const $ = id => document.getElementById(id);
+
+    function setBadge(el, text, cls) {
+        el.className = 'badge ' + cls;
+        el.textContent = text;
+    }
+
+    function showMsg(text, isError = false) {
+        const el = $('controlMsg');
+        el.textContent = text;
+        el.style.background = isError ? '#fee2e2' : '#eff6ff';
+        el.style.color = isError ? '#b91c1c' : '#1d4ed8';
+        el.classList.add('show');
+        setTimeout(() => el.classList.remove('show'), 3500);
+    }
+
+    async function api(path, options = {}) {
+        const res = await fetch(path, Object.assign({headers: {'Content-Type': 'application/json'}}, options));
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('application/json')) return await res.json();
+        return await res.text();
+    }
+
+    async function refreshHealth() {
+        try {
+            const h = await api('/api/rfid/health');
+            setBadge($('health'), h === 'healthy' ? 'healthy' : '异常', h === 'healthy' ? 'ok' : 'bad');
+        } catch (e) {
+            setBadge($('health'), '异常', 'bad');
+        }
+    }
+
+    async function refreshStatus() {
+        try {
+            const res = await api('/api/rfid/status');
+            const s = res.data || {};
+            setBadge($('connected'), s.connected ? '已连接' : '未连接', s.connected ? 'ok' : 'bad');
+            setBadge($('reading'), s.reading ? '读取中' : '已停止', s.reading ? 'ok' : 'warn');
+            $('serial').textContent = s.actualSerialPort || '-';
+            $('totalReads').textContent = s.totalReads || 0;
+            $('uniqueCount').textContent = s.uniqueCount || 0;
+            $('latestSeq').textContent = s.latestSeq || 0;
+            $('lastCallback').textContent = s.lastTagCallbackTime ? new Date(s.lastTagCallbackTime).toLocaleTimeString() : '-';
+            $('callbackAgo').textContent = s.lastTagCallbackAgoSeconds >= 0 ? `${s.lastTagCallbackAgoSeconds}s` : '-';
+            if (s.reading && s.lastTagCallbackAgoSeconds > 0 && s.lastTagCallbackAgoSeconds >= 10) {
+                showMsg(`读取中，但已 ${s.lastTagCallbackAgoSeconds} 秒没有收到标签回调，系统会自动尝试重启读取。`, true);
+            }
+            renderAntennas(s.antennas || []);
+            $('startBtn').disabled = !s.connected || s.reading;
+            $('stopBtn').disabled = !s.connected || !s.reading;
+        } catch (e) {
+            setBadge($('connected'), '未知', 'bad');
+            setBadge($('reading'), '未知', 'bad');
+        }
+    }
+
+    function renderAntennas(antennas) {
+        const wrap = $('antennaList');
+        wrap.innerHTML = '';
+        antennas.forEach(a => {
+            const dbm = Math.round(a.powerDbm);
+            const div = document.createElement('div');
+            div.className = 'antenna';
+            div.innerHTML = `
+                <strong>ANT${a.id}</strong>
+                <input id="ant-range-${a.id}" type="range" min="0" max="33" value="${dbm}" oninput="syncAntPower(${a.id}, this.value)">
+                <input id="ant-power-${a.id}" type="number" min="0" max="33" value="${dbm}" oninput="syncAntPower(${a.id}, this.value)">
+                <button onclick="setAntennaPower(${a.id})">应用</button>
+            `;
+            wrap.appendChild(div);
+        });
+    }
+
+    function syncAllPower(v) {
+        v = Math.max(0, Math.min(33, parseInt(v || '0', 10)));
+        $('allPower').value = v;
+        $('allPowerRange').value = v;
+    }
+
+    function syncAntPower(id, v) {
+        v = Math.max(0, Math.min(33, parseInt(v || '0', 10)));
+        const input = $('ant-power-' + id);
+        const range = $('ant-range-' + id);
+        if (input) input.value = v;
+        if (range) range.value = v;
+    }
+
+    async function startReading() {
+        const r = await api('/api/rfid/reading/start', {method: 'POST'});
+        showMsg(r.message || (r.success ? '已开始读取' : '开始失败'), !r.success);
+        await refreshStatus();
+    }
+
+    async function stopReading() {
+        const r = await api('/api/rfid/reading/stop', {method: 'POST'});
+        showMsg(r.message || (r.success ? '已停止读取' : '停止失败'), !r.success);
+        await refreshStatus();
+    }
+
+    async function restartReading() {
+        const r = await api('/api/rfid/reading/restart', {method: 'POST'});
+        showMsg(r.message || (r.success ? '已重启读取' : '重启失败'), !r.success);
+        await refreshStatus();
+    }
+
+    async function clearTags() {
+        if (!confirm('确定清空 EPC 记录？清空后已读标签会重新显示为新标签。')) return;
+        const r = await api('/api/rfid/tags/clear', {method: 'POST'});
+        lastSeq = 0;
+        rowCount = 0;
+        $('tagBody').innerHTML = '<tr><td colspan="4" class="empty">等待标签...</td></tr>';
+        $('displayCount').textContent = '0';
+        showMsg(r.message || '已清空', !r.success);
+        await refreshStatus();
+    }
+
+    async function setAllPower() {
+        const power = parseInt($('allPower').value, 10);
+        const r = await api('/api/rfid/antennas/power', {method: 'POST', body: JSON.stringify({power})});
+        showMsg(r.success ? `所有天线已设置为 ${power} dBm` : (r.message || '设置失败'), !r.success);
+        await refreshStatus();
+    }
+
+    async function setAntennaPower(id) {
+        const power = parseInt($('ant-power-' + id).value, 10);
+        const r = await api(`/api/rfid/antennas/${id}/power`, {method: 'POST', body: JSON.stringify({power})});
+        showMsg(r.success ? `ANT${id} 已设置为 ${power} dBm` : (r.message || '设置失败'), !r.success);
+        await refreshStatus();
+    }
+
+    async function pollTags() {
+        try {
+            const data = (await api('/api/rfid/tags?since=' + lastSeq)).data || {};
+            const items = data.items || [];
+            if (typeof data.latestSeq === 'number') lastSeq = Math.max(lastSeq, data.latestSeq);
+            if (items.length) appendTags(items);
+        } catch (e) { /* 静默，状态轮询会显示异常 */ }
+    }
+
+    function appendTags(items) {
+        const body = $('tagBody');
+        const empty = body.querySelector('.empty');
+        if (empty) body.innerHTML = '';
+        items.sort((a, b) => a.seq - b.seq).forEach(item => {
+            lastSeq = Math.max(lastSeq, item.seq);
+            const tr = document.createElement('tr');
+            tr.className = 'new-row';
+            tr.innerHTML = `<td>${new Date(item.timestamp).toLocaleString()}</td><td><strong>${item.epc}</strong></td><td>${item.rssi} dBm</td><td>ANT${item.antenna}</td>`;
+            body.insertBefore(tr, body.firstChild);
+            rowCount++;
+        });
+        while (body.children.length > MAX_ROWS) body.removeChild(body.lastChild);
+        $('displayCount').textContent = body.children.length;
+    }
+
+    async function refreshAll() {
+        await refreshHealth();
+        await refreshStatus();
+        await pollTags();
+    }
+
+    refreshAll();
+    setInterval(refreshStatus, 2000);
+    setInterval(refreshHealth, 5000);
+    setInterval(pollTags, 500);
+</script>
+</body>
+</html>

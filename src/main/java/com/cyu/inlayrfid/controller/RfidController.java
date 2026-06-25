@@ -1,6 +1,14 @@
 package com.cyu.inlayrfid.controller;
 
 import com.cyu.inlayrfid.config.RfidProperties;
+import com.cyu.inlayrfid.entity.dto.AntennaPowerDTO;
+import com.cyu.inlayrfid.entity.vo.AntennaPowerBatchVO;
+import com.cyu.inlayrfid.entity.vo.AntennaPowerVO;
+import com.cyu.inlayrfid.entity.vo.AntennaSetResultVO;
+import com.cyu.inlayrfid.entity.vo.OperationVO;
+import com.cyu.inlayrfid.entity.vo.Result;
+import com.cyu.inlayrfid.entity.vo.RfidStatusVO;
+import com.cyu.inlayrfid.entity.vo.TagEventsVO;
 import com.cyu.inlayrfid.service.RfidService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,19 +18,16 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * RFID 读写器 REST 接口（给前端用）
- * <p>
- * 前端约定：
- *  - 功率字段统一用整数 dBm，范围 0~33
- *  - 后端自动 ×100 转成 SDK 需要的 0.1 dBm 单位
+ * RFID 读写器 REST 接口。
+ * power 统一使用 dBm 整数，范围 0~33。
  */
 @RestController
 @RequestMapping("/api/rfid")
@@ -39,142 +44,152 @@ public class RfidController {
         this.properties = properties;
     }
 
-    // =========================================================================
-    // 健康检查
-    // =========================================================================
-
     /**
-     * GET /api/rfid/health
-     * 返回固定字符串 "healthy"
+     * 健康检查，用于判断服务是否存活。
      */
     @GetMapping("/health")
     public String health() {
         return "healthy";
     }
 
-    // =========================================================================
-    // 单根天线功率修改
-    // =========================================================================
+    /**
+     * 查询 RFID 当前状态：连接状态、读取状态、串口、读取次数、天线功率等。
+     */
+    @GetMapping("/status")
+    public Result<RfidStatusVO> status() {
+        return Result.success(rfidService.getStatus());
+    }
 
     /**
-     * POST /api/rfid/antennas/{antId}/power
-     * Body: { "power": 18 }      ← 0~33 的整数，单位 dBm
-     *
-     * @param antId 天线 ID (0/1/2/3)
-     * @param body  JSON，必填 power 字段（0~33 整数）
+     * 开始持续读取标签。
+     * 读写器未连接时返回失败。
+     */
+    @PostMapping("/reading/start")
+    public Result<OperationVO> startReading() {
+        if (!rfidService.isConnected()) {
+            return Result.fail("读写器未连接");
+        }
+        boolean ok = rfidService.startReading();
+        OperationVO data = new OperationVO(rfidService.isReading());
+        return ok ? Result.success("已开始读取", data) : Result.fail("开始读取失败");
+    }
+
+    /**
+     * 停止持续读取标签。
+     * 读写器未连接时返回失败。
+     */
+    @PostMapping("/reading/stop")
+    public Result<OperationVO> stopReading() {
+        if (!rfidService.isConnected()) {
+            return Result.fail("读写器未连接");
+        }
+        boolean ok = rfidService.stopReading();
+        OperationVO data = new OperationVO(rfidService.isReading());
+        return ok ? Result.success("已停止读取", data) : Result.fail("停止读取失败");
+    }
+
+    /**
+     * 重启持续读取标签。
+     * 适用于读写器还连接着但长时间没有标签回调的场景。
+     */
+    @PostMapping("/reading/restart")
+    public Result<OperationVO> restartReading() {
+        if (!rfidService.isConnected()) {
+            return Result.fail("读写器未连接");
+        }
+        boolean ok = rfidService.restartReading();
+        OperationVO data = new OperationVO(rfidService.isReading());
+        return ok ? Result.success("已重启读取", data) : Result.fail("重启读取失败");
+    }
+
+    /**
+     * 增量获取读取到的新 EPC。
+     * since 表示上一次拿到的最新序号，前端用它避免重复拉取。
+     */
+    @GetMapping("/tags")
+    public Result<TagEventsVO> tags(@RequestParam(value = "since", defaultValue = "0") long since) {
+        TagEventsVO data = new TagEventsVO(rfidService.getStatus().getLatestSeq(), rfidService.getTagEventsSince(since));
+        return Result.success(data);
+    }
+
+    /**
+     * 清空已读 EPC 记录。
+     * 清空后，同一个标签再次出现会重新作为新标签返回。
+     */
+    @PostMapping("/tags/clear")
+    public Result<TagEventsVO> clearTags() {
+        rfidService.clearTags();
+        return Result.success("已清空 EPC 记录", new TagEventsVO(0, java.util.Collections.emptyList()));
+    }
+
+    /**
+     * 修改单根天线功率。
+     * antId 是天线编号，power 单位是 dBm，范围 0~33。
      */
     @PostMapping("/antennas/{antId}/power")
-    public Map<String, Object> setAntennaPower(
+    public Result<AntennaPowerVO> setAntennaPower(
             @PathVariable int antId,
-            @RequestBody Map<String, Object> body) {
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("antId", antId);
+            @RequestBody AntennaPowerDTO dto) {
 
         if (!rfidService.isConnected()) {
-            result.put("success", false);
-            result.put("message", "读写器未连接");
-            return result;
+            return Result.fail("读写器未连接");
         }
 
-        Object powerObj = body.get("power");
-        if (powerObj == null) {
-            result.put("success", false);
-            result.put("message", "缺少 power 字段");
-            return result;
+        Integer powerDbm = parsePowerDbm(dto);
+        if (powerDbm == null) {
+            return Result.fail("power 必须是 0~33 的整数");
         }
 
-        int powerDbm;
-        try {
-            powerDbm = Integer.parseInt(String.valueOf(powerObj));
-        } catch (NumberFormatException e) {
-            result.put("success", false);
-            result.put("message", "power 必须是 0~33 的整数");
-            return result;
-        }
-
-        if (powerDbm < 0 || powerDbm > 33) {
-            result.put("success", false);
-            result.put("message", "power 范围 0~33，当前: " + powerDbm);
-            return result;
-        }
-
-        // 前端传 dBm，SDK 需要 0.1 dBm，×100
         int powerRaw = powerDbm * 100;
         try {
             boolean ok = rfidService.setAntennaPower(antId, powerRaw);
-            result.put("success", ok);
-            result.put("powerDbm", powerDbm);
-            result.put("message", ok ? "修改成功" : "修改失败");
+            AntennaPowerVO data = new AntennaPowerVO(antId, powerDbm);
+            return ok ? Result.success("修改成功", data) : Result.fail("修改失败");
         } catch (Exception e) {
             log.error("修改天线功率异常: antId={}, power={}dBm, err={}", antId, powerDbm, e.getMessage());
-            result.put("success", false);
-            result.put("message", "修改异常: " + e.getMessage());
+            return Result.fail("修改异常: " + e.getMessage());
         }
-        return result;
     }
 
-    // =========================================================================
-    // 所有天线统一功率修改
-    // =========================================================================
-
     /**
-     * POST /api/rfid/antennas/power
-     * Body: { "power": 18 }      ← 0~33 的整数，单位 dBm
-     *
-     * 把所有天线统一改成指定功率
+     * 统一修改所有天线功率。
+     * power 单位是 dBm，范围 0~33。
      */
     @PostMapping("/antennas/power")
-    public Map<String, Object> setAllAntennasPower(@RequestBody Map<String, Object> body) {
-
-        Map<String, Object> result = new LinkedHashMap<>();
-
+    public Result<AntennaPowerBatchVO> setAllAntennasPower(@RequestBody AntennaPowerDTO dto) {
         if (!rfidService.isConnected()) {
-            result.put("success", false);
-            result.put("message", "读写器未连接");
-            return result;
+            return Result.fail("读写器未连接");
         }
 
-        Object powerObj = body.get("power");
-        if (powerObj == null) {
-            result.put("success", false);
-            result.put("message", "缺少 power 字段");
-            return result;
+        Integer powerDbm = parsePowerDbm(dto);
+        if (powerDbm == null) {
+            return Result.fail("power 必须是 0~33 的整数");
         }
 
-        int powerDbm;
-        try {
-            powerDbm = Integer.parseInt(String.valueOf(powerObj));
-        } catch (NumberFormatException e) {
-            result.put("success", false);
-            result.put("message", "power 必须是 0~33 的整数");
-            return result;
-        }
-
-        if (powerDbm < 0 || powerDbm > 33) {
-            result.put("success", false);
-            result.put("message", "power 范围 0~33，当前: " + powerDbm);
-            return result;
-        }
-
-        // 前端传 dBm，SDK 需要 0.1 dBm，×100
         int powerRaw = powerDbm * 100;
         Map<Integer, Integer> antPowerMap = new LinkedHashMap<>();
         for (RfidProperties.Antenna ant : properties.getAntennas()) {
             antPowerMap.put(ant.getId(), powerRaw);
         }
 
-        Map<Integer, Boolean> results = rfidService.setAntennaPowers(antPowerMap);
+        List<AntennaSetResultVO> results = rfidService.setAntennaPowers(antPowerMap);
+        AntennaPowerBatchVO data = new AntennaPowerBatchVO(powerDbm, results);
+        boolean success = results.stream().allMatch(AntennaSetResultVO::isSuccess);
+        return success ? Result.success("修改成功", data) : Result.fail("部分天线修改失败");
+    }
 
-        // 整理返回结果（用 dBm 显示，方便前端）
-        Map<Integer, Boolean> resultsReadable = new LinkedHashMap<>();
-        for (Map.Entry<Integer, Boolean> e : results.entrySet()) {
-            resultsReadable.put(e.getKey(), e.getValue());
+    /**
+     * 解析并校验 power 参数。
+     * 前端传 dBm 整数，校验通过后调用方会乘以 100 转成 SDK 单位。
+     */
+    private Integer parsePowerDbm(AntennaPowerDTO dto) {
+        if (dto == null || dto.getPower() == null) {
+            return null;
         }
-
-        result.put("results", resultsReadable);
-        result.put("powerDbm", powerDbm);
-        result.put("success", results.values().stream().allMatch(Boolean::booleanValue));
-        return result;
+        Integer powerDbm = dto.getPower();
+        if (powerDbm < 0 || powerDbm > 33) {
+            return null;
+        }
+        return powerDbm;
     }
 }

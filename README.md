@@ -76,6 +76,14 @@
 
 浏览器打开 `http://服务器IP:8080/api/rfid/health`，返回 `healthy` 就是正常。
 
+也可以直接打开控制台页面：
+
+```text
+http://服务器IP:8080/
+```
+
+页面可以开始/停止读取、调节天线功率、实时查看新读到的 EPC。
+
 或者命令行：
 ```bash
 curl http://服务器IP:8080/api/rfid/health
@@ -219,7 +227,38 @@ GET /api/rfid/health
 curl http://localhost:8080/api/rfid/health
 ```
 
-### 6.2 修改单根天线功率
+### 6.2 获取状态
+
+```http
+GET /api/rfid/status
+```
+
+返回连接状态、读取状态、串口、读取次数、天线功率等。
+
+### 6.3 开始 / 停止读取
+
+```http
+POST /api/rfid/reading/start
+POST /api/rfid/reading/stop
+```
+
+### 6.4 获取新读到的 EPC
+
+```http
+GET /api/rfid/tags?since=0
+```
+
+前端保存返回的 `latestSeq`，下次用 `since=latestSeq` 增量获取新 EPC。
+
+### 6.5 清空 EPC 记录
+
+```http
+POST /api/rfid/tags/clear
+```
+
+清空后，之前已经读过的 EPC 再次出现时会重新作为“新标签”返回。
+
+### 6.6 修改单根天线功率
 
 ```http
 POST /api/rfid/antennas/{antId}/power
@@ -250,7 +289,7 @@ curl -X POST http://localhost:8080/api/rfid/antennas/1/power \
      -d '{"power": 18}'
 ```
 
-### 6.3 修改所有天线功率（统一）
+### 6.7 修改所有天线功率（统一）
 
 ```http
 POST /api/rfid/antennas/power
@@ -268,7 +307,7 @@ Content-Type: application/json
 }
 ```
 
-### 6.4 错误响应
+### 6.8 错误响应
 
 | 场景 | 响应 |
 |------|------|

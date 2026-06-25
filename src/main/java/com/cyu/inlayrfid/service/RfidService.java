@@ -1,6 +1,10 @@
 package com.cyu.inlayrfid.service;
 
 import com.cyu.inlayrfid.config.RfidProperties;
+import com.cyu.inlayrfid.entity.vo.AntennaSetResultVO;
+import com.cyu.inlayrfid.entity.vo.AntennaVO;
+import com.cyu.inlayrfid.entity.vo.RfidStatusVO;
+import com.cyu.inlayrfid.entity.vo.TagEventVO;
 import com.fazecast.jSerialComm.SerialPort;
 import com.inlaylink.connect.port.SerialPortHandle;
 import com.inlaylink.rfid.Reader;
@@ -26,6 +30,9 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.PreDestroy;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -36,6 +43,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -91,6 +99,30 @@ public class RfidService {
 
     /** 专用保活线程（非 daemon），让 JVM 持续运行；shutdown 时立刻退出 */
     private volatile Thread keepaliveThread;
+
+    /** 当前是否正在持续盘点 */
+    private final AtomicBoolean reading = new AtomicBoolean(false);
+
+    /** 已读到的不同 EPC，用于去重 */
+    private final Set<String> seenEpcs = ConcurrentHashMap.newKeySet();
+
+    /** SDK 回调总次数（含重复标签） */
+    private final AtomicLong totalReads = new AtomicLong();
+
+    /** 标签事件递增序号，前端用 since 参数增量拉取 */
+    private final AtomicLong sequence = new AtomicLong();
+
+    /** 最近一次收到 SDK 标签回调的时间 */
+    private final AtomicLong lastTagCallbackTime = new AtomicLong(0);
+
+    /** 最近一次自动或手动重启读取的时间 */
+    private final AtomicLong lastReadingRestartTime = new AtomicLong(0);
+
+    /** 最近的新 EPC 事件，供页面展示 */
+    private final ConcurrentLinkedDeque<TagEventVO> tagEvents = new ConcurrentLinkedDeque<>();
+
+    /** 最多保留多少条事件，避免长时间运行占内存 */
+    private static final int MAX_TAG_EVENTS = 1000;
 
     @Autowired
     public RfidService(RfidProperties properties) {
@@ -438,6 +470,7 @@ public class RfidService {
         } finally {
             connected = false;
             reader = null;
+            reading.set(false);
             // 只在第一次断开时打印一次「等待重连」
             if (!disconnectLogged) {
                 log.warn("读写器已断开 ({}), 后台持续重连中...", actualSerialPort);
@@ -448,6 +481,7 @@ public class RfidService {
     }
 
     public boolean isConnected() { return connected; }
+    public boolean isReading() { return reading.get(); }
     public Reader rawReader() { return reader; }
     public String getActualSerialPort() { return actualSerialPort; }
 
@@ -473,8 +507,10 @@ public class RfidService {
         if (shutdown) return;
 
         if (connected) {
-            // 已连接：定期心跳检测
             long now = System.currentTimeMillis();
+            checkReadingWatchdog(now);
+
+            // 已连接：定期心跳检测
             if (now - lastHeartbeat > 2000) {
                 lastHeartbeat = now;
                 if (!isPortStillPresent()) {
@@ -518,6 +554,63 @@ public class RfidService {
             disconnectLogged = false;
         }
         // 失败时不打印任何信息，静默等待下次重试
+    }
+
+    /**
+     * 检查持续读取是否长时间没有收到任何标签回调，必要时自动重启盘点。
+     */
+    private void checkReadingWatchdog(long now) {
+        if (!properties.getInventory().isWatchdogEnabled() || !reading.get()) {
+            return;
+        }
+        long last = lastTagCallbackTime.get();
+        if (last <= 0) {
+            return;
+        }
+        long timeoutMs = Math.max(1, properties.getInventory().getNoTagTimeoutSeconds()) * 1000L;
+        if (now - last <= timeoutMs) {
+            return;
+        }
+        // 防止 SDK 假死时每秒连续重启，至少间隔 timeout 时间再重启一次
+        long lastRestart = lastReadingRestartTime.get();
+        if (now - lastRestart < timeoutMs) {
+            return;
+        }
+        log.warn("读取中已 {} 秒没有收到任何标签回调，尝试自动重启盘点...", (now - last) / 1000);
+        restartReadingInternal("watchdog");
+    }
+
+    /**
+     * 重启持续读取：停止盘点，短暂等待后重新开始。
+     */
+    public boolean restartReading() {
+        ensureConnected();
+        return restartReadingInternal("manual");
+    }
+
+    /**
+     * 内部重启逻辑。reason 仅用于日志标识。
+     */
+    private synchronized boolean restartReadingInternal(String reason) {
+        if (!connected || reader == null) {
+            return false;
+        }
+        lastReadingRestartTime.set(System.currentTimeMillis());
+        log.info("重启持续盘点，原因: {}", reason);
+        try {
+            if (reading.get()) {
+                stopReading();
+            }
+            TimeUnit.MILLISECONDS.sleep(500);
+            boolean ok = startReading();
+            if (ok) {
+                lastTagCallbackTime.set(System.currentTimeMillis());
+            }
+            return ok;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     /**
@@ -677,10 +770,10 @@ public class RfidService {
     /**
      * 批量修改多根天线的功率。
      */
-    public java.util.Map<Integer, Boolean> setAntennaPowers(java.util.Map<Integer, Integer> antPowerMap) {
-        java.util.Map<Integer, Boolean> results = new java.util.LinkedHashMap<>();
+    public java.util.List<AntennaSetResultVO> setAntennaPowers(java.util.Map<Integer, Integer> antPowerMap) {
+        java.util.List<AntennaSetResultVO> results = new java.util.ArrayList<>();
         for (java.util.Map.Entry<Integer, Integer> e : antPowerMap.entrySet()) {
-            results.put(e.getKey(), setAntennaPower(e.getKey(), e.getValue()));
+            results.add(new AntennaSetResultVO(e.getKey(), setAntennaPower(e.getKey(), e.getValue())));
         }
         return results;
     }
@@ -699,6 +792,122 @@ public class RfidService {
     public void setInventoryCallback(java.util.function.Consumer<InventoryTag> callback) {
         ensureConnected();
         reader.setInventoryCallback(callback::accept);
+    }
+
+    /**
+     * 开始持续读取。读取到的新 EPC 会写入 tagEvents，并通过 /api/rfid/tags 增量返回。
+     */
+    public boolean startReading() {
+        ensureConnected();
+        if (!reading.compareAndSet(false, true)) {
+            return true;
+        }
+        try {
+            reader.setSelectMode(Select.SELECT_ALL, null, null);
+            lastTagCallbackTime.set(System.currentTimeMillis());
+            reader.setInventoryCallback(tag -> {
+                lastTagCallbackTime.set(System.currentTimeMillis());
+                totalReads.incrementAndGet();
+                String epc = tag.getEpc();
+                if (epc == null || epc.trim().isEmpty()) {
+                    return;
+                }
+                if (seenEpcs.add(epc)) {
+                    long seq = sequence.incrementAndGet();
+                    TagEventVO event = new TagEventVO(seq, epc, tag.getRssi(), tag.getAnt(), System.currentTimeMillis());
+                    tagEvents.addLast(event);
+                    trimTagEvents();
+                    log.info("【新标签】 EPC={}  RSSI={} dBm  天线={}", epc, tag.getRssi(), tag.getAnt());
+                }
+            });
+
+            CountDownLatch latch = new CountDownLatch(1);
+            AtomicBoolean ok = new AtomicBoolean(false);
+            reader.startInventory(
+                    s -> { ok.set(true); latch.countDown(); },
+                    f -> { log.error("启动盘点失败: {}", f); latch.countDown(); });
+            latch.await(DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            if (ok.get()) {
+                log.info("持续盘点已启动，等待标签...");
+                return true;
+            }
+            reading.set(false);
+            return false;
+        } catch (Exception e) {
+            reading.set(false);
+            log.error("开启持续盘点异常: {}", e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /** 停止持续读取。 */
+    public boolean stopReading() {
+        ensureConnected();
+        if (!reading.compareAndSet(true, false)) {
+            return true;
+        }
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicBoolean ok = new AtomicBoolean(true);
+        try {
+            if (reader.isReading()) {
+                reader.stopInventory(
+                        s -> { log.info("持续盘点已停止"); latch.countDown(); },
+                        f -> { ok.set(false); log.warn("停止盘点失败: {}", f); latch.countDown(); });
+                latch.await(DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            }
+        } catch (Exception e) {
+            ok.set(false);
+            log.warn("停止盘点异常: {}", e.getMessage());
+        }
+        return ok.get();
+    }
+
+    /** 清空已读 EPC 与页面事件，下次读到同一 EPC 会重新作为新标签。 */
+    public void clearTags() {
+        seenEpcs.clear();
+        tagEvents.clear();
+        totalReads.set(0);
+        sequence.set(0);
+        log.info("已清空 EPC 读取记录");
+    }
+
+    /** 获取当前运行状态。 */
+    public RfidStatusVO getStatus() {
+        RfidStatusVO status = new RfidStatusVO();
+        status.setConnected(connected);
+        status.setReading(reading.get());
+        status.setActualSerialPort(actualSerialPort);
+        status.setTotalReads(totalReads.get());
+        status.setUniqueCount(seenEpcs.size());
+        status.setLatestSeq(sequence.get());
+        long lastCallback = lastTagCallbackTime.get();
+        status.setLastTagCallbackTime(lastCallback);
+        status.setLastTagCallbackAgoSeconds(lastCallback > 0 ? (System.currentTimeMillis() - lastCallback) / 1000 : -1);
+        status.setLastReadingRestartTime(lastReadingRestartTime.get());
+
+        java.util.List<AntennaVO> antennas = new java.util.ArrayList<>();
+        for (RfidProperties.Antenna ant : properties.getAntennas()) {
+            antennas.add(new AntennaVO(ant.getId(), ant.getPower(), ant.getPower() / 100.0, ant.getPower() > 0));
+        }
+        status.setAntennas(antennas);
+        return status;
+    }
+
+    /** 获取 sequence 大于 since 的新标签事件。 */
+    public java.util.List<TagEventVO> getTagEventsSince(long since) {
+        java.util.List<TagEventVO> result = new java.util.ArrayList<>();
+        for (TagEventVO event : tagEvents) {
+            if (event.getSeq() > since) {
+                result.add(event);
+            }
+        }
+        return result;
+    }
+
+    private void trimTagEvents() {
+        while (tagEvents.size() > MAX_TAG_EVENTS) {
+            tagEvents.pollFirst();
+        }
     }
 
     public void startInventory(Consumer<Success> onSuccess, Consumer<Failure> onFailure) {

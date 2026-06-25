@@ -39,6 +39,9 @@ public class RfidProperties {
     /** 连接重试配置 */
     private Reconnect reconnect = new Reconnect();
 
+    /** 盘点配置 */
+    private Inventory inventory = new Inventory();
+
     // ===== Inner classes =====
 
     public static class Antenna {
@@ -96,6 +99,24 @@ public class RfidProperties {
         public void setMaxAttempts(int maxAttempts) { this.maxAttempts = maxAttempts; }
     }
 
+    public static class Inventory {
+        /** 读写器连接成功后是否自动开始读取 */
+        private boolean autoStart = true;
+
+        /** 是否开启读取看门狗 */
+        private boolean watchdogEnabled = true;
+
+        /** 读取中超过多少秒没有任何标签回调就自动重启盘点 */
+        private int noTagTimeoutSeconds = 10;
+
+        public boolean isAutoStart() { return autoStart; }
+        public void setAutoStart(boolean autoStart) { this.autoStart = autoStart; }
+        public boolean isWatchdogEnabled() { return watchdogEnabled; }
+        public void setWatchdogEnabled(boolean watchdogEnabled) { this.watchdogEnabled = watchdogEnabled; }
+        public int getNoTagTimeoutSeconds() { return noTagTimeoutSeconds; }
+        public void setNoTagTimeoutSeconds(int noTagTimeoutSeconds) { this.noTagTimeoutSeconds = noTagTimeoutSeconds; }
+    }
+
     // ===== Getters/Setters =====
 
     public String getSerialPort() { return serialPort; }
@@ -114,4 +135,6 @@ public class RfidProperties {
     public void setQ(Q q) { this.q = q; }
     public Reconnect getReconnect() { return reconnect; }
     public void setReconnect(Reconnect reconnect) { this.reconnect = reconnect; }
+    public Inventory getInventory() { return inventory; }
+    public void setInventory(Inventory inventory) { this.inventory = inventory; }
 }
