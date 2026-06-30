@@ -1,9 +1,7 @@
 package com.cyu.inlayrfid.controller;
 
-import com.cyu.inlayrfid.config.RfidProperties;
 import com.cyu.inlayrfid.entity.dto.AntennaPowerDTO;
 import com.cyu.inlayrfid.entity.vo.AntennaPowerBatchVO;
-import com.cyu.inlayrfid.entity.vo.AntennaPowerVO;
 import com.cyu.inlayrfid.entity.vo.AntennaSetResultVO;
 import com.cyu.inlayrfid.entity.vo.OperationVO;
 import com.cyu.inlayrfid.entity.vo.Result;
@@ -14,16 +12,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * RFID 读写器 REST 接口。
@@ -36,12 +31,10 @@ public class RfidController {
     private static final Logger log = LoggerFactory.getLogger(RfidController.class);
 
     private final RfidService rfidService;
-    private final RfidProperties properties;
 
     @Autowired
-    public RfidController(RfidService rfidService, RfidProperties properties) {
+    public RfidController(RfidService rfidService) {
         this.rfidService = rfidService;
-        this.properties = properties;
     }
 
     /**
@@ -123,35 +116,6 @@ public class RfidController {
     }
 
     /**
-     * 修改单根天线功率。
-     * antId 是天线编号，power 单位是 dBm，范围 0~33。
-     */
-    @PostMapping("/antennas/{antId}/power")
-    public Result<AntennaPowerVO> setAntennaPower(
-            @PathVariable int antId,
-            @RequestBody AntennaPowerDTO dto) {
-
-        if (!rfidService.isConnected()) {
-            return Result.fail("读写器未连接");
-        }
-
-        Integer powerDbm = parsePowerDbm(dto);
-        if (powerDbm == null) {
-            return Result.fail("power 必须是 0~33 的整数");
-        }
-
-        int powerRaw = powerDbm * 100;
-        try {
-            boolean ok = rfidService.setAntennaPower(antId, powerRaw);
-            AntennaPowerVO data = new AntennaPowerVO(antId, powerDbm);
-            return ok ? Result.success("修改成功", data) : Result.fail("修改失败");
-        } catch (Exception e) {
-            log.error("修改天线功率异常: antId={}, power={}dBm, err={}", antId, powerDbm, e.getMessage());
-            return Result.fail("修改异常: " + e.getMessage());
-        }
-    }
-
-    /**
      * 统一修改所有天线功率。
      * power 单位是 dBm，范围 0~33。
      */
@@ -167,12 +131,7 @@ public class RfidController {
         }
 
         int powerRaw = powerDbm * 100;
-        Map<Integer, Integer> antPowerMap = new LinkedHashMap<>();
-        for (RfidProperties.Antenna ant : properties.getAntennas()) {
-            antPowerMap.put(ant.getId(), powerRaw);
-        }
-
-        List<AntennaSetResultVO> results = rfidService.setAntennaPowers(antPowerMap);
+        List<AntennaSetResultVO> results = rfidService.setAllAntennaPower(powerRaw);
         AntennaPowerBatchVO data = new AntennaPowerBatchVO(powerDbm, results);
         boolean success = results.stream().allMatch(AntennaSetResultVO::isSuccess);
         return success ? Result.success("修改成功", data) : Result.fail("部分天线修改失败");

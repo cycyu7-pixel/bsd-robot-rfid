@@ -13,8 +13,7 @@ import org.springframework.stereotype.Component;
  * 流程：
  *  1. 启动后台线程持续扫描串口、连接读写器
  *  2. 连接成功 → 应用默认参数
- *  3. 如果配置 auto-start=true，则自动开启持续盘点
- *  4. 页面也可以随时通过 REST 接口开始/停止盘点
+ *  3. 等待页面或 REST 接口手动开始/停止盘点
  */
 @Component
 public class RfidRunner implements CommandLineRunner {
@@ -51,20 +50,16 @@ public class RfidRunner implements CommandLineRunner {
         log.info("  自动重连: {}", properties.getReconnect().isEnabled()
                 ? "已开启（间隔 " + properties.getReconnect().getIntervalSeconds() + " 秒）"
                 : "已关闭");
-        log.info("  自动开始读取: {}", properties.getInventory().isAutoStart() ? "是" : "否");
+        log.info("  读取启动方式: 手动（页面或 REST 接口触发）");
         log.info("========================================");
 
         rfidService.addConnectionListener(new RfidService.ConnectionListener() {
             @Override
             public void onConnected() {
-                log.info("--- 读写器已连接，初始化参数 ---");
+                log.info("--- 读写器已连接，初始化 Query/Q 参数 ---");
                 rfidService.printVersion();
-                rfidService.applyDefaultConfig();
-                if (properties.getInventory().isAutoStart()) {
-                    rfidService.startReading();
-                } else {
-                    log.info("auto-start=false，等待页面手动开始读取");
-                }
+                rfidService.applyQueryAndQConfig();
+                log.info("读写器初始化完成，未自动修改天线功率，等待页面或接口手动开始读取");
             }
 
             @Override

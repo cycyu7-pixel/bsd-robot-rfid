@@ -1,10 +1,11 @@
 package com.cyu.inlayrfid.entity.vo;
 
-import java.util.List;
+import lombok.Data;
 
 /**
  * RFID 当前运行状态。
  */
+@Data
 public class RfidStatusVO {
 
     /**
@@ -48,92 +49,27 @@ public class RfidStatusVO {
     private long lastTagCallbackAgoSeconds;
 
     /**
-     * 最近一次自动或手动重启读取的时间戳，毫秒。
+     * 最近一次手动重启读取的时间戳，毫秒。
      */
     private long lastReadingRestartTime;
 
     /**
-     * 天线配置列表。
+     * 当前统一天线功率，SDK 原始单位，1500 = 15 dBm。
      */
-    private List<AntennaVO> antennas;
+    private int antennaPower;
 
-    public boolean isConnected() {
-        return connected;
-    }
+    /**
+     * 当前统一天线功率，单位 dBm。
+     */
+    private double antennaPowerDbm;
 
-    public void setConnected(boolean connected) {
-        this.connected = connected;
-    }
+    /**
+     * 当前配置的天线端口数量。
+     */
+    private int antennaCount;
 
-    public boolean isReading() {
-        return reading;
-    }
-
-    public void setReading(boolean reading) {
-        this.reading = reading;
-    }
-
-    public String getActualSerialPort() {
-        return actualSerialPort;
-    }
-
-    public void setActualSerialPort(String actualSerialPort) {
-        this.actualSerialPort = actualSerialPort;
-    }
-
-    public long getTotalReads() {
-        return totalReads;
-    }
-
-    public void setTotalReads(long totalReads) {
-        this.totalReads = totalReads;
-    }
-
-    public int getUniqueCount() {
-        return uniqueCount;
-    }
-
-    public void setUniqueCount(int uniqueCount) {
-        this.uniqueCount = uniqueCount;
-    }
-
-    public long getLatestSeq() {
-        return latestSeq;
-    }
-
-    public void setLatestSeq(long latestSeq) {
-        this.latestSeq = latestSeq;
-    }
-
-    public long getLastTagCallbackTime() {
-        return lastTagCallbackTime;
-    }
-
-    public void setLastTagCallbackTime(long lastTagCallbackTime) {
-        this.lastTagCallbackTime = lastTagCallbackTime;
-    }
-
-    public long getLastTagCallbackAgoSeconds() {
-        return lastTagCallbackAgoSeconds;
-    }
-
-    public void setLastTagCallbackAgoSeconds(long lastTagCallbackAgoSeconds) {
-        this.lastTagCallbackAgoSeconds = lastTagCallbackAgoSeconds;
-    }
-
-    public long getLastReadingRestartTime() {
-        return lastReadingRestartTime;
-    }
-
-    public void setLastReadingRestartTime(long lastReadingRestartTime) {
-        this.lastReadingRestartTime = lastReadingRestartTime;
-    }
-
-    public List<AntennaVO> getAntennas() {
-        return antennas;
-    }
-
-    public void setAntennas(List<AntennaVO> antennas) {
-        this.antennas = antennas;
-    }
+    /**
+     * 当前所有配置天线端口的功率是否一致。
+     */
+    private boolean antennaPowerUniform;
 }

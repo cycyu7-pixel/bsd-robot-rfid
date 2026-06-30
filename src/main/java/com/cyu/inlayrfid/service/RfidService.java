@@ -2,7 +2,6 @@ package com.cyu.inlayrfid.service;
 
 import com.cyu.inlayrfid.config.RfidProperties;
 import com.cyu.inlayrfid.entity.vo.AntennaSetResultVO;
-import com.cyu.inlayrfid.entity.vo.AntennaVO;
 import com.cyu.inlayrfid.entity.vo.RfidStatusVO;
 import com.cyu.inlayrfid.entity.vo.TagEventVO;
 import com.fazecast.jSerialComm.SerialPort;
@@ -115,7 +114,7 @@ public class RfidService {
     /** 最近一次收到 SDK 标签回调的时间 */
     private final AtomicLong lastTagCallbackTime = new AtomicLong(0);
 
-    /** 最近一次自动或手动重启读取的时间 */
+    /** 最近一次手动重启读取的时间 */
     private final AtomicLong lastReadingRestartTime = new AtomicLong(0);
 
     /** 最近的新 EPC 事件，供页面展示 */
@@ -508,7 +507,6 @@ public class RfidService {
 
         if (connected) {
             long now = System.currentTimeMillis();
-            checkReadingWatchdog(now);
 
             // 已连接：定期心跳检测
             if (now - lastHeartbeat > 2000) {
@@ -554,30 +552,6 @@ public class RfidService {
             disconnectLogged = false;
         }
         // 失败时不打印任何信息，静默等待下次重试
-    }
-
-    /**
-     * 检查持续读取是否长时间没有收到任何标签回调，必要时自动重启盘点。
-     */
-    private void checkReadingWatchdog(long now) {
-        if (!properties.getInventory().isWatchdogEnabled() || !reading.get()) {
-            return;
-        }
-        long last = lastTagCallbackTime.get();
-        if (last <= 0) {
-            return;
-        }
-        long timeoutMs = Math.max(1, properties.getInventory().getNoTagTimeoutSeconds()) * 1000L;
-        if (now - last <= timeoutMs) {
-            return;
-        }
-        // 防止 SDK 假死时每秒连续重启，至少间隔 timeout 时间再重启一次
-        long lastRestart = lastReadingRestartTime.get();
-        if (now - lastRestart < timeoutMs) {
-            return;
-        }
-        log.warn("读取中已 {} 秒没有收到任何标签回调，尝试自动重启盘点...", (now - last) / 1000);
-        restartReadingInternal("watchdog");
     }
 
     /**
@@ -686,20 +660,8 @@ public class RfidService {
     // 基础参数配置
     // =========================================================================
 
-    public void applyDefaultConfig() {
+    public void applyQueryAndQConfig() {
         ensureConnected();
-
-        // 配置所有天线（按 application.yml 中的 antennas 列表）
-        for (RfidProperties.Antenna ant : properties.getAntennas()) {
-            AntConfig antConfig = new AntConfig.Builder()
-                    .setAntId(ant.getId())
-                    .setPower(ant.getPower())
-                    .setEnable(true)
-                    .build();
-            reader.setAntConfig(antConfig,
-                    s -> log.info("天线 ANT{} 配置成功: {} dBm", ant.getId(), ant.getPower() / 100.0),
-                    f -> log.warn("天线 ANT{} 配置失败: {}", ant.getId(), f));
-        }
 
         QueryConfig queryConfig = new QueryConfig.Builder()
                 .setSession(properties.getQuery().getSession())
@@ -720,18 +682,29 @@ public class RfidService {
     }
 
     /**
-     * 动态修改单根天线的功率（运行时，不需要重启程序）。
+     * 动态统一修改所有配置天线端口的功率（运行时，不需要重启程序）。
      *
-     * @param antId 天线 ID (0/1/2/3)
-     * @param power 功率，单位 0.1 dBm（如 1800 = 18 dBm）
-     * @return true 设置成功
+     * @param power 功率，单位 0.01 dBm（如 1800 = 18 dBm）
+     * @return 每个天线端口的配置应用结果
      */
-    public boolean setAntennaPower(int antId, int power) {
+    public java.util.List<AntennaSetResultVO> setAllAntennaPower(int power) {
         ensureConnected();
         if (power < 0 || power > 3300) {
             throw new IllegalArgumentException("功率必须在 0~3300 之间 (0~33 dBm)，当前: " + power);
         }
 
+        java.util.List<AntennaSetResultVO> results = new java.util.ArrayList<>();
+        for (RfidProperties.Antenna ant : properties.getAntennas()) {
+            results.add(new AntennaSetResultVO(ant.getId(), applyAntennaPower(ant.getId(), power)));
+        }
+        return results;
+    }
+
+    /**
+     * 向 SDK 应用单个天线端口的功率。
+     * 这是统一功率下发的内部实现，不对接口层暴露单根天线调节场景。
+     */
+    private boolean applyAntennaPower(int antId, int power) {
         AtomicBoolean ok = new AtomicBoolean(false);
         CountDownLatch latch = new CountDownLatch(1);
 
@@ -768,18 +741,7 @@ public class RfidService {
     }
 
     /**
-     * 批量修改多根天线的功率。
-     */
-    public java.util.List<AntennaSetResultVO> setAntennaPowers(java.util.Map<Integer, Integer> antPowerMap) {
-        java.util.List<AntennaSetResultVO> results = new java.util.ArrayList<>();
-        for (java.util.Map.Entry<Integer, Integer> e : antPowerMap.entrySet()) {
-            results.add(new AntennaSetResultVO(e.getKey(), setAntennaPower(e.getKey(), e.getValue())));
-        }
-        return results;
-    }
-
-    /**
-     * 查询当前内存中所有天线的配置（来自 yml + 运行时动态修改后的值）。
+     * 查询当前内存中所有天线端口的配置（来自 yml + 运行时统一修改后的值）。
      */
     public java.util.List<RfidProperties.Antenna> getAntennaConfigs() {
         return new java.util.ArrayList<>(properties.getAntennas());
@@ -885,11 +847,22 @@ public class RfidService {
         status.setLastTagCallbackAgoSeconds(lastCallback > 0 ? (System.currentTimeMillis() - lastCallback) / 1000 : -1);
         status.setLastReadingRestartTime(lastReadingRestartTime.get());
 
-        java.util.List<AntennaVO> antennas = new java.util.ArrayList<>();
-        for (RfidProperties.Antenna ant : properties.getAntennas()) {
-            antennas.add(new AntennaVO(ant.getId(), ant.getPower(), ant.getPower() / 100.0, ant.getPower() > 0));
+        int antennaPower = 0;
+        boolean powerUniform = true;
+        java.util.List<RfidProperties.Antenna> antennas = properties.getAntennas();
+        if (antennas != null && !antennas.isEmpty()) {
+            antennaPower = antennas.stream().mapToInt(RfidProperties.Antenna::getPower).max().orElse(0);
+            for (RfidProperties.Antenna ant : antennas) {
+                if (ant.getPower() != antennaPower) {
+                    powerUniform = false;
+                    break;
+                }
+            }
         }
-        status.setAntennas(antennas);
+        status.setAntennaPower(antennaPower);
+        status.setAntennaPowerDbm(antennaPower / 100.0);
+        status.setAntennaCount(antennas == null ? 0 : antennas.size());
+        status.setAntennaPowerUniform(powerUniform);
         return status;
     }
 

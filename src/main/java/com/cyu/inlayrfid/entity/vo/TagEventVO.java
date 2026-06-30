@@ -1,8 +1,15 @@
 package com.cyu.inlayrfid.entity.vo;
 
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
 /**
  * RFID 标签读取事件。
  */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
 public class TagEventVO {
 
     /**
@@ -29,55 +36,4 @@ public class TagEventVO {
      * 读取时间戳，毫秒。
      */
     private long timestamp;
-
-    public TagEventVO() {
-    }
-
-    public TagEventVO(long seq, String epc, float rssi, int antenna, long timestamp) {
-        this.seq = seq;
-        this.epc = epc;
-        this.rssi = rssi;
-        this.antenna = antenna;
-        this.timestamp = timestamp;
-    }
-
-    public long getSeq() {
-        return seq;
-    }
-
-    public void setSeq(long seq) {
-        this.seq = seq;
-    }
-
-    public String getEpc() {
-        return epc;
-    }
-
-    public void setEpc(String epc) {
-        this.epc = epc;
-    }
-
-    public float getRssi() {
-        return rssi;
-    }
-
-    public void setRssi(float rssi) {
-        this.rssi = rssi;
-    }
-
-    public int getAntenna() {
-        return antenna;
-    }
-
-    public void setAntenna(int antenna) {
-        this.antenna = antenna;
-    }
-
-    public long getTimestamp() {
-        return timestamp;
-    }
-
-    public void setTimestamp(long timestamp) {
-        this.timestamp = timestamp;
-    }
 }
