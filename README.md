@@ -71,6 +71,7 @@
 | --- | --- | --- |
 | RFID 自动连接与重连 | 自动扫描串口，按 USB VID 识别 InLayLink 设备；掉线后后台重连 | `RfidService.startReconnectService()` |
 | 手动盘点与 EPC 去重 | 手动触发读取标签，记录总读取次数、不同 EPC 数、最近标签事件 | `RfidService.startReading()` |
+| 一次性扫描（回调） | 机器人流程控制调用 `/api/rfid/scan`，扫到 EPC 后异步回调结果 | `ScanService`、`ScanTask` |
 | 控制台与 REST API | 页面查看状态、开始/停止/重启读取、清空 EPC、调节功率 | `RfidController`、`static/index.html` |
 
 ---
@@ -229,11 +230,14 @@ bsd-robot-rfid/
 │   │   ├── java/com/cyu/inlayrfid/
 │   │   │   ├── InLayRfidApplication.java    # Spring Boot 启动入口
 │   │   │   ├── config/RfidProperties.java   # rfid.* 配置映射
+│   │   │   ├── config/ThreadPoolConfig.java # 一次性扫描线程池 + RestTemplate Bean
 │   │   │   ├── controller/RfidController.java # REST 接口
 │   │   │   ├── entity/dto/                  # 请求 DTO
 │   │   │   ├── entity/vo/                   # 响应 VO
 │   │   │   ├── runner/RfidRunner.java       # 启动后注册监听、开启重连
-│   │   │   └── service/RfidService.java     # RFID 连接、读取、重连、读写标签核心逻辑
+│   │   │   ├── service/RfidService.java     # RFID 连接、读取、重连、读写标签核心逻辑
+│   │   │   ├── service/ScanService.java     # 一次性扫描编排，提交任务到线程池
+│   │   │   └── task/ScanTask.java           # 一次性扫描任务（事件驱动，扫到/超时后回调）
 │   │   └── resources/
 │   │       ├── application.yml              # 应用配置，含 dev/prod profile
 │   │       ├── logback-spring.xml           # 日志配置
@@ -252,6 +256,9 @@ bsd-robot-rfid/
 | `src/main/java/com/cyu/inlayrfid/runner/RfidRunner.java` | Spring Boot 启动后执行初始化流程 | 改启动流程、自动读取策略时修改 |
 | `src/main/java/com/cyu/inlayrfid/controller/RfidController.java` | 对外 REST API | 新增 HTTP 接口时修改 |
 | `src/main/java/com/cyu/inlayrfid/config/RfidProperties.java` | `application.yml` 配置映射 | 新增 `rfid.*` 配置时同步添加字段 |
+| `src/main/java/com/cyu/inlayrfid/config/ThreadPoolConfig.java` | 一次性扫描线程池（core=1, max=3, queue=5）与 RestTemplate Bean | 调整扫描并发、回调 HTTP 客户端时修改 |
+| `src/main/java/com/cyu/inlayrfid/service/ScanService.java` | 一次性扫描编排，生成 requestId 并提交任务到线程池 | 改扫描任务提交逻辑时修改 |
+| `src/main/java/com/cyu/inlayrfid/task/ScanTask.java` | 一次性扫描任务，打开/关闭读写器、扫到或超时后回调调用方 | 改扫描流程、回调逻辑、超时时长时修改 |
 | `src/main/java/com/cyu/inlayrfid/entity/dto` | 请求入参对象 | 不建议用 `Map` 接口入参，优先新增 DTO |
 | `src/main/java/com/cyu/inlayrfid/entity/vo` | 接口响应对象 | 新增接口响应字段时优先新增 VO |
 | `src/main/resources/static/index.html` | 浏览器控制台 | 改页面展示和接口调用逻辑时修改 |
@@ -288,6 +295,11 @@ spring:
 logging:
   file:
     path: ./logs # 日志目录；prod profile 会覆盖为 /usr/log/rfid-logs
+
+# 一次性扫描回调地址（机器人上的流程控制服务接口）
+# 扫描到 EPC / 超时 / 出错后，本服务会 POST 结果到该地址
+scan:
+  callback-url: http://localhost:18800/api/rfid-callback
 
 rfid:
   serial-port: auto # 串口路径；auto 表示自动扫描，也可以写 /dev/ttyACM0、/dev/ttyUSB0、COM3
@@ -365,6 +377,7 @@ rfid:
 | `rfid.antennas` | 否 | ANT0-ANT3 | 配置服务需要管理的天线端口；`power` 仅作展示/记录，连接时不自动下发 |
 | `rfid.reconnect.enabled` | 否 | `true` | 生产环境建议开启 |
 | `rfid.inventory.auto-start` | 否 | `false` | 当前保留为兼容旧配置；实际启动流程固定等待手动读取 |
+| `scan.callback-url` | 否 | `http://localhost:18800/api/rfid-callback` | 一次性扫描回调地址，机器人流程控制服务所在位置 |
 
 ### 5.3 默认值速查
 
@@ -380,6 +393,7 @@ rfid:
 | `rfid.query.session` | `S0` | `application.yml` / `RfidProperties` |
 | `rfid.query.target` | `AB` | `application.yml` / `RfidProperties` |
 | `rfid.q.init/max/min` | `5/9/0` | `application.yml` / `RfidProperties` |
+| `scan.callback-url` | `http://localhost:18800/api/rfid-callback` | `application.yml` / `ScanService` 读取 |
 
 ### 5.4 环境变量覆盖
 
@@ -740,7 +754,81 @@ curl -X POST http://localhost:8080/api/rfid/antennas/power \
   -d '{"power":18}'
 ```
 
-### 6.9 常见错误响应
+### 6.9 一次性扫描（回调模式）
+
+这是机器人抓取场景的核心接口：**流程控制服务调用本接口触发一次扫描，立即拿到 `requestId`，扫描结果异步回调到配置好的地址**（默认 `http://localhost:18800/api/rfid-callback`）。
+
+#### 请求
+
+```http
+POST /api/rfid/scan
+```
+
+无请求体。超时时间固定 35 秒（`ScanTask` 中常量 `SCAN_TIMEOUT_SEC`），调用方无需传任何参数。
+
+#### 立即响应
+
+```json
+{
+  "success": true,
+  "message": "scan accepted",
+  "data": {
+    "requestId": "a1b2c3d4e5f6..."
+  }
+}
+```
+
+流程控制服务拿到 `requestId` 存起来，等回调。
+
+#### 回调（本服务 → 流程控制服务）
+
+扫描完成/超时/出错后，本服务向 `scan.callback-url` 发起 POST：
+
+```json
+// 扫到了
+{
+  "requestId": "a1b2c3d4e5f6...",
+  "epc": "E200001234567",
+  "error": null
+}
+
+// 超时/出错
+{
+  "requestId": "a1b2c3d4e5f6...",
+  "epc": null,
+  "error": "扫描超时（35s），未读取到 EPC，请重新发起扫描"
+}
+```
+
+#### 流程控制服务处理逻辑
+
+```java
+if (result.error != null) {
+    // 出错/超时 → 清掉该 requestId 缓存，重新调 POST /api/rfid/scan
+    retry();
+} else {
+    // 成功 → 拿 result.epc 干活
+    process(result.epc);
+}
+```
+
+#### 触发场景
+
+| 场景 | 回调 payload | 流程控制处理 |
+| --- | --- | --- |
+| 扫到 EPC | `error: null, epc: "E2..."` | 处理 EPC |
+| 35s 超时 | `error: "扫描超时..."` | 清缓存重试 |
+| 读写器未连接 | `error: "读写器未连接"` | 清缓存重试 |
+| 启动盘点失败 | `error: "启动盘点失败"` | 清缓存重试 |
+| 线程池满载（排队>5） | 立即返回 `{"success":false,...}` | 稍后重试 |
+
+curl：
+
+```bash
+curl -X POST http://localhost:8080/api/rfid/scan
+```
+
+### 6.10 常见错误响应
 
 | 场景 | 响应示例 | 处理方式 |
 | --- | --- | --- |
@@ -1360,6 +1448,9 @@ sudo docker logs --tail=100 inlay-rfid
 | `RfidProperties` | 绑定 `rfid.*` 配置 |
 | `RfidRunner` | 启动后注册连接监听器、启动重连任务 |
 | `RfidService` | 连接、重连、心跳、手动盘点、读写标签、功率设置 |
+| `ScanService` | 一次性扫描编排：生成 `requestId`，提交扫描任务到线程池 |
+| `ScanTask` | 一次性扫描任务：打开/关闭读写器，扫到 EPC 或超时/出错后回调调用方 |
+| `ThreadPoolConfig` | 一次性扫描线程池（core=1, max=3, queue=5）+ RestTemplate Bean |
 | `RfidController` | REST API |
 | `Result<T>` | 统一接口响应 |
 | `RfidStatusVO` | 状态接口响应 |

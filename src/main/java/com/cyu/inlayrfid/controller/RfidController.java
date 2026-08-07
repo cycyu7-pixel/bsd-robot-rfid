@@ -1,13 +1,16 @@
 package com.cyu.inlayrfid.controller;
 
+import com.cyu.inlayrfid.config.ThreadPoolConfig;
 import com.cyu.inlayrfid.entity.dto.AntennaPowerDTO;
 import com.cyu.inlayrfid.entity.vo.AntennaPowerBatchVO;
 import com.cyu.inlayrfid.entity.vo.AntennaSetResultVO;
 import com.cyu.inlayrfid.entity.vo.OperationVO;
 import com.cyu.inlayrfid.entity.vo.Result;
 import com.cyu.inlayrfid.entity.vo.RfidStatusVO;
+import com.cyu.inlayrfid.entity.vo.ScanResponseVO;
 import com.cyu.inlayrfid.entity.vo.TagEventsVO;
 import com.cyu.inlayrfid.service.RfidService;
+import com.cyu.inlayrfid.service.ScanService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,10 +34,12 @@ public class RfidController {
     private static final Logger log = LoggerFactory.getLogger(RfidController.class);
 
     private final RfidService rfidService;
+    private final ScanService scanService;
 
     @Autowired
-    public RfidController(RfidService rfidService) {
+    public RfidController(RfidService rfidService, ScanService scanService) {
         this.rfidService = rfidService;
+        this.scanService = scanService;
     }
 
     /**
@@ -113,6 +118,31 @@ public class RfidController {
     public Result<TagEventsVO> clearTags() {
         rfidService.clearTags();
         return Result.success("已清空 EPC 记录", new TagEventsVO(0, java.util.Collections.emptyList()));
+    }
+
+    /**
+     * 一次性扫描：提交扫描任务后立即返回 requestId，扫描结果回调到配置的地址。
+     * <p>
+     * 超时 35 秒未读到 EPC 算失败，回调 payload 中 error 不为 null。
+     * 调用方根据 requestId 匹配回调，error 不为 null 时应清缓存重试。
+     * <p>
+     * 线程池满载（排队超过 5 条）时返回 429 拒绝。
+     */
+    @PostMapping("/scan")
+    public Result<ScanResponseVO> scan() {
+        if (!rfidService.isConnected()) {
+            return Result.fail("读写器未连接");
+        }
+
+        String requestId;
+        try {
+            requestId = scanService.scanAsync();
+        } catch (ThreadPoolConfig.RejectedExecutionException e) {
+            log.warn("扫描队列已满，拒绝请求: {}", e.getMessage());
+            return Result.fail("扫描任务过多，请稍后重试");
+        }
+
+        return Result.success("scan accepted", new ScanResponseVO(requestId));
     }
 
     /**

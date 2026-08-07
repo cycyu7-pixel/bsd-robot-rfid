@@ -21,6 +21,7 @@ import com.inlaylink.rfid.bean.send.QueryConfig;
 import com.inlaylink.rfid.bean.send.ReadConfig;
 import com.inlaylink.rfid.bean.send.SelectConfig;
 import com.inlaylink.rfid.bean.send.WriteConfig;
+import com.inlaylink.rfid.communication.InventoryHandle;
 import com.inlaylink.rfid.process.ReaderImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -122,6 +123,9 @@ public class RfidService {
 
     /** 最多保留多少条事件，避免长时间运行占内存 */
     private static final int MAX_TAG_EVENTS = 1000;
+
+    /** 持续模式的回调引用，scan-once 任务需要保存/恢复它 */
+    volatile InventoryHandle continuousCallback;
 
     @Autowired
     public RfidService(RfidProperties properties) {
@@ -767,7 +771,7 @@ public class RfidService {
         try {
             reader.setSelectMode(Select.SELECT_ALL, null, null);
             lastTagCallbackTime.set(System.currentTimeMillis());
-            reader.setInventoryCallback(tag -> {
+            continuousCallback = tag -> {
                 lastTagCallbackTime.set(System.currentTimeMillis());
                 totalReads.incrementAndGet();
                 String epc = tag.getEpc();
@@ -781,7 +785,8 @@ public class RfidService {
                     trimTagEvents();
                     log.info("【新标签】 EPC={}  RSSI={} dBm  天线={}", epc, tag.getRssi(), tag.getAnt());
                 }
-            });
+            };
+            reader.setInventoryCallback(continuousCallback);
 
             CountDownLatch latch = new CountDownLatch(1);
             AtomicBoolean ok = new AtomicBoolean(false);
@@ -1047,6 +1052,38 @@ public class RfidService {
             Thread.currentThread().interrupt();
         }
         return result.get();
+    }
+
+    // =========================================================================
+    // 公开访问器（task 包使用）
+    // =========================================================================
+
+    /**
+     * 获取当前 Reader 实例。
+     */
+    public Reader getReader() {
+        return reader;
+    }
+
+    /**
+     * 获取调度器线程池。
+     */
+    public ScheduledExecutorService getScheduler() {
+        return scheduler;
+    }
+
+    /**
+     * 获取当前持续模式的 callback 引用。
+     */
+    public InventoryHandle getContinuousCallback() {
+        return continuousCallback;
+    }
+
+    /**
+     * 设置当前持续模式的 callback 引用。
+     */
+    public void setContinuousCallback(InventoryHandle callback) {
+        this.continuousCallback = callback;
     }
 
     // =========================================================================
