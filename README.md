@@ -299,7 +299,7 @@ logging:
 # 一次性扫描回调地址（机器人上的流程控制服务接口）
 # 扫描到 EPC / 超时 / 出错后，本服务会 POST 结果到该地址
 scan:
-  callback-url: http://localhost:18800/api/rfid-callback
+  callback-url: http://localhost:18800/api/v1/epc/callback
 
 rfid:
   serial-port: auto # 串口路径；auto 表示自动扫描，也可以写 /dev/ttyACM0、/dev/ttyUSB0、COM3
@@ -377,7 +377,7 @@ rfid:
 | `rfid.antennas` | 否 | ANT0-ANT3 | 配置服务需要管理的天线端口；`power` 仅作展示/记录，连接时不自动下发 |
 | `rfid.reconnect.enabled` | 否 | `true` | 生产环境建议开启 |
 | `rfid.inventory.auto-start` | 否 | `false` | 当前保留为兼容旧配置；实际启动流程固定等待手动读取 |
-| `scan.callback-url` | 否 | `http://localhost:18800/api/rfid-callback` | 一次性扫描回调地址，机器人流程控制服务所在位置 |
+| `scan.callback-url` | 否 | `http://localhost:18800/api/v1/epc/callback` | 一次性扫描回调地址，机器人流程控制服务所在位置 |
 
 ### 5.3 默认值速查
 
@@ -393,7 +393,7 @@ rfid:
 | `rfid.query.session` | `S0` | `application.yml` / `RfidProperties` |
 | `rfid.query.target` | `AB` | `application.yml` / `RfidProperties` |
 | `rfid.q.init/max/min` | `5/9/0` | `application.yml` / `RfidProperties` |
-| `scan.callback-url` | `http://localhost:18800/api/rfid-callback` | `application.yml` / `ScanService` 读取 |
+| `scan.callback-url` | `http://localhost:18800/api/v1/epc/callback` | `application.yml` / `ScanService` 读取 |
 
 ### 5.4 环境变量覆盖
 
@@ -756,7 +756,7 @@ curl -X POST http://localhost:8080/api/rfid/antennas/power \
 
 ### 6.9 一次性扫描（回调模式）
 
-这是机器人抓取场景的核心接口：**流程控制服务调用本接口触发一次扫描，立即拿到 `requestId`，扫描结果异步回调到配置好的地址**（默认 `http://localhost:18800/api/rfid-callback`）。
+这是机器人抓取场景的核心接口：**流程控制服务调用本接口触发一次扫描，立即拿到 `requestId`，扫描结果异步回调到配置好的地址**（默认 `http://localhost:18800/api/v1/epc/callback`）。
 
 #### 请求
 

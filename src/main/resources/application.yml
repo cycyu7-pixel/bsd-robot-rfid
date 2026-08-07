@@ -6,7 +6,7 @@ server:
 
 # 一次性扫描回调地址（流程控制服务在本机 18800 端口）
 scan:
-  callback-url: http://localhost:18800/api/rfid-callback
+  callback-url: http://localhost:18800/api/v1/epc/callback
 
 spring:
   application:
