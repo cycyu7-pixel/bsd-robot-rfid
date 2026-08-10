@@ -39,10 +39,9 @@ RUN mvn -B -q clean package -DskipTests
 FROM ${RUNTIME_IMAGE}
 LABEL maintainer="InLay-RFID"
 
-# 装一些调试工具（lsusb / ls /dev/tty* 用），不需要可删
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends usbutils \
-    && rm -rf /var/lib/apt/lists/*
+# 注：原先这里 apt-get 安装 usbutils（lsusb 调试用），
+# 但 ARM 机器访问 ports.ubuntu.com 常因网络限制失败，已移除。
+# 调试串口可用宿主机的 ls /dev/tty* 代替，不影响程序运行。
 
 WORKDIR /app
 
