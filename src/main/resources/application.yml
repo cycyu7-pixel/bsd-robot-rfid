@@ -4,9 +4,11 @@
 server:
   port: 8080
 
-# 一次性扫描回调地址（流程控制服务在本机 18800 端口）
+# 一次性扫描回调地址（流程控制服务在宿主机 18800 端口）
+# 注意：本服务跑在 Docker 容器(bridge 网络)里，容器内 127.0.0.1/localhost 指向容器自己，
+# 连不上宿主机的 18800。用 host.docker.internal 指向宿主机（启动需加 --add-host=host.docker.internal:host-gateway）
 scan:
-  callback-url: http://localhost:18800/api/v1/epc/callback
+  callback-url: http://host.docker.internal:18800/api/v1/epc/callback
 
 spring:
   application:
