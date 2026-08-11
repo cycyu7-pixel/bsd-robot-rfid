@@ -134,6 +134,7 @@ run_container() {
         --name "$CONTAINER_NAME" \
         --restart=always \
         --privileged \
+        --add-host host.docker.internal:host-gateway \
         -p "$APP_PORT":8080 \
         -v /dev:/dev \
         -v "$LOG_DIR":"$LOG_DIR" \
